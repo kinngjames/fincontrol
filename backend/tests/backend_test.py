@@ -1,237 +1,237 @@
-"""FinControl backend API tests."""
+"""FinControl backend tests: profiles auth, bots fleet, savings, income, expenses, settings, dashboard, isolation."""
 import os
-import uuid
-from datetime import datetime, timezone
-
 import pytest
 import requests
+from datetime import datetime, timezone
 
-BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/") if os.environ.get("REACT_APP_BACKEND_URL") else None
-if not BASE_URL:
-    # fall back to reading frontend .env
-    with open("/app/frontend/.env") as f:
-        for line in f:
-            if line.startswith("REACT_APP_BACKEND_URL="):
-                BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
-                break
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://fincontrol-167.preview.emergentagent.com').rstrip('/')
+API = f"{BASE_URL}/api"
 
-DEMO_EMAIL = "demo@fincontrol.app"
-DEMO_PASSWORD = "demo1234"
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-# ------------------ Fixtures ------------------
-@pytest.fixture(scope="session")
-def session():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
+THIS_MONTH = datetime.now(timezone.utc).strftime("%Y-%m")
 
 
 @pytest.fixture(scope="session")
-def demo_token(session):
-    r = session.post(f"{BASE_URL}/api/auth/login", json={"email": DEMO_EMAIL, "password": DEMO_PASSWORD})
-    assert r.status_code == 200, r.text
+def demo_token():
+    r = requests.get(f"{API}/profiles")
+    assert r.status_code == 200
+    profiles = r.json()
+    demo = next((p for p in profiles if p["name"] == "Alex Demo"), None)
+    assert demo, "Alex Demo profile missing"
+    r = requests.post(f"{API}/auth/select", json={"user_id": demo["id"]})
+    assert r.status_code == 200
     return r.json()["token"]
 
 
 @pytest.fixture(scope="session")
 def demo_headers(demo_token):
-    return {"Authorization": f"Bearer {demo_token}", "Content-Type": "application/json"}
+    return {"Authorization": f"Bearer {demo_token}"}
 
 
-@pytest.fixture(scope="session")
-def new_user(session):
-    email = f"test_{uuid.uuid4().hex[:10]}@example.com"
-    r = session.post(f"{BASE_URL}/api/auth/register",
-                     json={"name": "Test User", "email": email, "password": "pass1234"})
-    assert r.status_code == 200, r.text
-    data = r.json()
-    return {"email": email, "token": data["token"], "headers": {"Authorization": f"Bearer {data['token']}", "Content-Type": "application/json"}}
-
-
-# ------------------ Auth ------------------
+# ---- Profiles / Auth ----
 class TestAuth:
-    def test_login_demo(self, session):
-        r = session.post(f"{BASE_URL}/api/auth/login", json={"email": DEMO_EMAIL, "password": DEMO_PASSWORD})
+    def test_list_profiles(self):
+        r = requests.get(f"{API}/profiles")
         assert r.status_code == 200
-        d = r.json()
-        assert "token" in d and d["user"]["email"] == DEMO_EMAIL
+        assert any(p["name"] == "Alex Demo" for p in r.json())
 
-    def test_login_invalid(self, session):
-        r = session.post(f"{BASE_URL}/api/auth/login", json={"email": DEMO_EMAIL, "password": "wrong"})
+    def test_create_and_select_profile(self):
+        name = f"TEST_Profile_{datetime.now(timezone.utc).timestamp()}"
+        r = requests.post(f"{API}/profiles", json={"name": name})
+        assert r.status_code == 200
+        pid = r.json()["id"]
+        r2 = requests.post(f"{API}/auth/select", json={"user_id": pid})
+        assert r2.status_code == 200
+        tok = r2.json()["token"]
+        assert isinstance(tok, str) and len(tok) > 20
+        me = requests.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {tok}"})
+        assert me.status_code == 200
+        assert me.json()["id"] == pid
+        requests.delete(f"{API}/profiles/{pid}")
+
+    def test_me_requires_token(self):
+        r = requests.get(f"{API}/auth/me")
         assert r.status_code == 401
 
-    def test_me(self, session, demo_headers):
-        r = session.get(f"{BASE_URL}/api/auth/me", headers=demo_headers)
+
+class TestBots:
+    def test_list_and_overview_not_shadowed(self, demo_headers):
+        r = requests.get(f"{API}/bots", headers=demo_headers)
         assert r.status_code == 200
-        assert r.json()["email"] == DEMO_EMAIL
+        assert isinstance(r.json(), list)
 
-    def test_me_unauthed(self, session):
-        r = session.get(f"{BASE_URL}/api/auth/me")
-        assert r.status_code == 401
+        ov = requests.get(f"{API}/bots/overview", headers=demo_headers)
+        assert ov.status_code == 200, f"overview shadowed? {ov.text}"
+        data = ov.json()
+        for k in ("total_cumulative_usd", "total_cumulative_eur", "active_count", "paused_count", "bot_count", "series", "bots"):
+            assert k in data
 
-    def test_register_duplicate(self, session):
-        r = session.post(f"{BASE_URL}/api/auth/register",
-                         json={"name": "x", "email": DEMO_EMAIL, "password": "any"})
-        assert r.status_code == 400
-
-    def test_register_new(self, new_user):
-        assert new_user["token"]
-
-
-# ------------------ Dashboard ------------------
-class TestDashboard:
-    def test_demo_dashboard(self, session, demo_headers):
-        r = session.get(f"{BASE_URL}/api/dashboard/summary", headers=demo_headers)
+    def test_bot_lifecycle_and_returns(self, demo_headers):
+        r = requests.post(f"{API}/bots", json={"name": "TEST_Bot"}, headers=demo_headers)
         assert r.status_code == 200
-        d = r.json()
-        for k in ["net_worth_eur", "bot_profit_usd", "bot_profit_eur", "funds_value_eur",
-                  "month_expenses_eur", "category_breakdown", "performance", "usd_to_eur"]:
-            assert k in d
-        assert d["funds_value_eur"] > 0  # seeded
-        assert len(d["category_breakdown"]) == 5
-        assert len(d["performance"]) > 0
+        bot = r.json()
+        bid = bot["id"]
+        assert bot["status"] == "active"
 
-    def test_new_user_dashboard_empty(self, session, new_user):
-        r = session.get(f"{BASE_URL}/api/dashboard/summary", headers=new_user["headers"])
-        assert r.status_code == 200
-        d = r.json()
-        assert d["net_worth_eur"] == 0
-        assert d["funds_value_eur"] == 0
-        assert d["bot_profit_usd"] == 0
+        d = requests.get(f"{API}/bots/{bid}", headers=demo_headers)
+        assert d.status_code == 200
+        assert d.json()["stats"]["cumulative_usd"] == 0.0
 
+        r1 = requests.post(f"{API}/bots/{bid}/returns",
+                           json={"date": f"{THIS_MONTH}-05", "amount_usd": 100.0, "note": "n1"},
+                           headers=demo_headers)
+        assert r1.status_code == 200
+        ret_id = r1.json()["id"]
+        requests.post(f"{API}/bots/{bid}/returns",
+                      json={"date": f"{THIS_MONTH}-06", "amount_usd": 50.0},
+                      headers=demo_headers)
 
-# ------------------ Settings ------------------
-class TestSettings:
-    def test_get_settings(self, session, new_user):
-        r = session.get(f"{BASE_URL}/api/settings", headers=new_user["headers"])
-        assert r.status_code == 200
-        assert r.json()["usd_to_eur"] == 0.92
+        d = requests.get(f"{API}/bots/{bid}", headers=demo_headers).json()
+        assert d["stats"]["cumulative_usd"] == 150.0
+        assert d["stats"]["this_month_usd"] == 150.0
+        assert d["stats"]["count"] == 2
 
-    def test_update_settings(self, session, new_user):
-        r = session.put(f"{BASE_URL}/api/settings", headers=new_user["headers"], json={"usd_to_eur": 0.95})
-        assert r.status_code == 200
-        assert r.json()["usd_to_eur"] == 0.95
-        # verify persistence
-        r2 = session.get(f"{BASE_URL}/api/settings", headers=new_user["headers"])
-        assert r2.json()["usd_to_eur"] == 0.95
+        upd = requests.put(f"{API}/bots/{bid}/returns/{ret_id}",
+                           json={"date": f"{THIS_MONTH}-05", "amount_usd": 200.0, "note": "upd"},
+                           headers=demo_headers)
+        assert upd.status_code == 200
+        d = requests.get(f"{API}/bots/{bid}", headers=demo_headers).json()
+        assert d["stats"]["cumulative_usd"] == 250.0
 
-    def test_invalid_rate(self, session, new_user):
-        r = session.put(f"{BASE_URL}/api/settings", headers=new_user["headers"], json={"usd_to_eur": -1})
-        assert r.status_code == 400
+        dr = requests.delete(f"{API}/bots/{bid}/returns/{ret_id}", headers=demo_headers)
+        assert dr.status_code == 200
+        d = requests.get(f"{API}/bots/{bid}", headers=demo_headers).json()
+        assert d["stats"]["cumulative_usd"] == 50.0
 
+        ov1 = requests.get(f"{API}/bots/overview", headers=demo_headers).json()
+        active_before = ov1["active_count"]
+        u = requests.put(f"{API}/bots/{bid}", json={"status": "paused"}, headers=demo_headers)
+        assert u.status_code == 200 and u.json()["status"] == "paused"
+        ov2 = requests.get(f"{API}/bots/overview", headers=demo_headers).json()
+        assert ov2["active_count"] == active_before - 1
 
-# ------------------ Bot Returns ------------------
-class TestBotReturns:
-    def test_stats_seeded(self, session, demo_headers):
-        r = session.get(f"{BASE_URL}/api/bot-returns/stats", headers=demo_headers)
-        assert r.status_code == 200
-        d = r.json()
-        assert d["count"] > 0
-        assert "cumulative_usd" in d and "daily_avg_usd" in d
+        requests.put(f"{API}/bots/{bid}", json={"status": "active"}, headers=demo_headers)
+        ov3 = requests.get(f"{API}/bots/overview", headers=demo_headers).json()
+        assert ov3["active_count"] == active_before
 
-    def test_crud(self, session, new_user):
-        # create
-        r = session.post(f"{BASE_URL}/api/bot-returns", headers=new_user["headers"],
-                         json={"date": TODAY, "amount_usd": 25.50, "note": "test"})
-        assert r.status_code == 200
-        item = r.json()
-        assert item["amount_usd"] == 25.50
-        item_id = item["id"]
-        # list
-        r = session.get(f"{BASE_URL}/api/bot-returns", headers=new_user["headers"])
-        assert any(x["id"] == item_id for x in r.json())
-        # update
-        r = session.put(f"{BASE_URL}/api/bot-returns/{item_id}", headers=new_user["headers"],
-                        json={"date": TODAY, "amount_usd": 30.0, "note": "u"})
-        assert r.status_code == 200 and r.json()["amount_usd"] == 30.0
-        # delete
-        r = session.delete(f"{BASE_URL}/api/bot-returns/{item_id}", headers=new_user["headers"])
-        assert r.status_code == 200
-        # verify gone
-        r = session.get(f"{BASE_URL}/api/bot-returns", headers=new_user["headers"])
-        assert not any(x["id"] == item_id for x in r.json())
+        dl = requests.delete(f"{API}/bots/{bid}", headers=demo_headers)
+        assert dl.status_code == 200
+        assert requests.get(f"{API}/bots/{bid}", headers=demo_headers).status_code == 404
 
 
-# ------------------ Funds ------------------
-class TestFunds:
-    def test_fund_lifecycle(self, session, new_user):
-        h = new_user["headers"]
-        # create
-        r = session.post(f"{BASE_URL}/api/funds", headers=h, json={"name": "TEST Fund", "current_value_eur": 1000.0})
-        assert r.status_code == 200
-        fund = r.json()
-        fid = fund["id"]
-        assert fund["cumulative_return_pct"] == 0
-        # contribution
-        r = session.post(f"{BASE_URL}/api/funds/{fid}/contributions", headers=h,
-                         json={"amount_eur": 500.0, "date": TODAY, "note": "c1"})
-        assert r.status_code == 200
-        f2 = r.json()
-        assert f2["invested_eur"] == 500.0
-        assert f2["cumulative_return_eur"] == 500.0  # 1000 - 500
-        assert len(f2["contributions"]) == 1
-        contrib_id = f2["contributions"][0]["id"]
-        # delete contribution
-        r = session.delete(f"{BASE_URL}/api/funds/{fid}/contributions/{contrib_id}", headers=h)
-        assert r.status_code == 200
-        assert len(r.json()["contributions"]) == 0
-        # update fund value
-        r = session.put(f"{BASE_URL}/api/funds/{fid}", headers=h,
-                        json={"name": "TEST Fund Renamed", "current_value_eur": 1500.0})
-        assert r.status_code == 200 and r.json()["current_value_eur"] == 1500.0
-        # delete
-        r = session.delete(f"{BASE_URL}/api/funds/{fid}", headers=h)
-        assert r.status_code == 200
-        r = session.get(f"{BASE_URL}/api/funds", headers=h)
-        assert not any(x["id"] == fid for x in r.json())
+class TestSavings:
+    def test_savings_flow(self, demo_headers):
+        before = requests.get(f"{API}/savings", headers=demo_headers).json()
+        base = before["balance_eur"]
+
+        d = requests.post(f"{API}/savings",
+                          json={"type": "deposit", "amount_eur": 300.0, "date": TODAY, "note": "TEST_dep"},
+                          headers=demo_headers)
+        assert d.status_code == 200
+        after_dep = d.json()
+        assert round(after_dep["balance_eur"] - base, 2) == 300.0
+
+        w = requests.post(f"{API}/savings",
+                          json={"type": "withdrawal", "amount_eur": 100.0, "date": TODAY, "note": "TEST_wd"},
+                          headers=demo_headers)
+        assert w.status_code == 200
+        after_w = w.json()
+        assert round(after_w["balance_eur"] - base, 2) == 200.0
+
+        for t in after_w["transactions"]:
+            if t.get("note", "").startswith("TEST_"):
+                requests.delete(f"{API}/savings/{t['id']}", headers=demo_headers)
+        final = requests.get(f"{API}/savings", headers=demo_headers).json()
+        assert final["balance_eur"] == base
 
 
-# ------------------ Expenses ------------------
+class TestIncome:
+    def test_income_crud(self, demo_headers):
+        before = requests.get(f"{API}/income", headers=demo_headers).json()
+        base_month = before["month_total_eur"]
+
+        c = requests.post(f"{API}/income",
+                          json={"amount_eur": 500.0, "date": TODAY, "description": "TEST_income"},
+                          headers=demo_headers)
+        assert c.status_code == 200
+        after = c.json()
+        assert round(after["month_total_eur"] - base_month, 2) == 500.0
+        item = next(i for i in after["items"] if i.get("description") == "TEST_income")
+        iid = item["id"]
+
+        u = requests.put(f"{API}/income/{iid}",
+                         json={"amount_eur": 600.0, "date": TODAY, "description": "TEST_income_upd"},
+                         headers=demo_headers)
+        assert u.status_code == 200
+        assert round(u.json()["month_total_eur"] - base_month, 2) == 600.0
+
+        d = requests.delete(f"{API}/income/{iid}", headers=demo_headers)
+        assert d.status_code == 200
+        assert d.json()["month_total_eur"] == base_month
+
+
 class TestExpenses:
-    def test_expense_crud(self, session, new_user):
-        h = new_user["headers"]
-        # invalid category
-        r = session.post(f"{BASE_URL}/api/expenses", headers=h,
-                         json={"amount_eur": 10, "category": "Bogus", "date": TODAY})
-        assert r.status_code == 400
-        # valid create
-        r = session.post(f"{BASE_URL}/api/expenses", headers=h,
-                         json={"amount_eur": 42.5, "category": "Food", "date": TODAY, "description": "test"})
-        assert r.status_code == 200
-        exp = r.json()
-        eid = exp["id"]
-        assert exp["category"] == "Food"
-        # list
-        r = session.get(f"{BASE_URL}/api/expenses", headers=h)
-        assert any(x["id"] == eid for x in r.json())
-        # update valid
-        r = session.put(f"{BASE_URL}/api/expenses/{eid}", headers=h,
-                        json={"amount_eur": 50.0, "category": "Transport", "date": TODAY})
-        assert r.status_code == 200 and r.json()["category"] == "Transport"
-        # update invalid category
-        r = session.put(f"{BASE_URL}/api/expenses/{eid}", headers=h,
-                        json={"amount_eur": 50.0, "category": "Bad", "date": TODAY})
-        assert r.status_code == 400
-        # delete
-        r = session.delete(f"{BASE_URL}/api/expenses/{eid}", headers=h)
-        assert r.status_code == 200
+    def test_expenses_crud_and_category_validation(self, demo_headers):
+        c = requests.post(f"{API}/expenses",
+                          json={"amount_eur": 12.5, "category": "Food", "date": TODAY, "description": "TEST_exp"},
+                          headers=demo_headers)
+        assert c.status_code == 200
+        eid = c.json()["id"]
+
+        bad = requests.post(f"{API}/expenses",
+                            json={"amount_eur": 1.0, "category": "Groceries", "date": TODAY},
+                            headers=demo_headers)
+        assert bad.status_code == 400
+
+        u = requests.put(f"{API}/expenses/{eid}",
+                         json={"amount_eur": 15.0, "category": "Transport", "date": TODAY, "description": "TEST_exp2"},
+                         headers=demo_headers)
+        assert u.status_code == 200
+        assert u.json()["category"] == "Transport"
+
+        d = requests.delete(f"{API}/expenses/{eid}", headers=demo_headers)
+        assert d.status_code == 200
 
 
-# ------------------ Isolation ------------------
+class TestSettingsDashboard:
+    def test_settings_affects_dashboard(self, demo_headers):
+        orig = requests.get(f"{API}/settings", headers=demo_headers).json()["usd_to_eur"]
+        try:
+            new_rate = 1.10
+            r = requests.put(f"{API}/settings", json={"usd_to_eur": new_rate}, headers=demo_headers)
+            assert r.status_code == 200
+            ds = requests.get(f"{API}/dashboard/summary", headers=demo_headers).json()
+            assert ds["usd_to_eur"] == new_rate
+            expected_bot_eur = round(ds["bot_profit_usd"] * new_rate, 2)
+            assert abs(ds["bot_profit_eur"] - expected_bot_eur) < 0.05
+            expected_nw = round(ds["funds_value_eur"] + ds["savings_balance_eur"] + ds["bot_profit_eur"], 2)
+            assert abs(ds["net_worth_eur"] - expected_nw) < 0.05
+            assert ds["month_net_eur"] == round(ds["month_income_eur"] - ds["month_expenses_eur"], 2)
+        finally:
+            requests.put(f"{API}/settings", json={"usd_to_eur": orig}, headers=demo_headers)
+
+    def test_invalid_rate(self, demo_headers):
+        r = requests.put(f"{API}/settings", json={"usd_to_eur": -1}, headers=demo_headers)
+        assert r.status_code == 400
+
+
 class TestIsolation:
-    def test_user_data_isolation(self, session):
-        # create two users
-        users = []
-        for _ in range(2):
-            email = f"iso_{uuid.uuid4().hex[:8]}@example.com"
-            r = session.post(f"{BASE_URL}/api/auth/register",
-                             json={"name": "iso", "email": email, "password": "pass1234"})
-            users.append({"h": {"Authorization": f"Bearer {r.json()['token']}"}})
-        # user A creates data
-        session.post(f"{BASE_URL}/api/expenses", headers=users[0]["h"],
-                     json={"amount_eur": 99, "category": "Food", "date": TODAY})
-        # user B sees none
-        r = session.get(f"{BASE_URL}/api/expenses", headers=users[1]["h"])
-        assert r.status_code == 200 and len(r.json()) == 0
+    def test_new_profile_has_no_data(self):
+        name = f"TEST_Isolate_{datetime.now(timezone.utc).timestamp()}"
+        pid = requests.post(f"{API}/profiles", json={"name": name}).json()["id"]
+        tok = requests.post(f"{API}/auth/select", json={"user_id": pid}).json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        try:
+            assert requests.get(f"{API}/bots", headers=h).json() == []
+            assert requests.get(f"{API}/funds", headers=h).json() == []
+            sav = requests.get(f"{API}/savings", headers=h).json()
+            assert sav["balance_eur"] == 0 and sav["transactions"] == []
+            inc = requests.get(f"{API}/income", headers=h).json()
+            assert inc["total_eur"] == 0 and inc["items"] == []
+            assert requests.get(f"{API}/expenses", headers=h).json() == []
+            ov = requests.get(f"{API}/bots/overview", headers=h).json()
+            assert ov["bot_count"] == 0 and ov["total_cumulative_usd"] == 0
+            ds = requests.get(f"{API}/dashboard/summary", headers=h).json()
+            assert ds["net_worth_eur"] == 0
+        finally:
+            requests.delete(f"{API}/profiles/{pid}")

@@ -1,0 +1,29 @@
+{
+  "summary": "Tested FinControl backend (11 pytest tests, all pass) and frontend flows via Playwright. Passwordless profile selector auth, bots fleet CRUD + status toggle + returns CRUD + overview (route ordering verified — /api/bots/overview is NOT shadowed by /api/bots/{id}), savings deposits/withdrawals, income CRUD, expenses CRUD (5-category validation), settings usd_to_eur affecting dashboard net_worth/bot_profit_eur, and data isolation for freshly-created profiles all work correctly. Frontend renders login profile selector, dashboard KPIs, Bot Fleet with combined chart + per-bot cards + Active/Paused switches + Analyze, Bot Detail with Log Daily Return, Savings capital-evolution chart, and Cash Flow Income/Expenses tabs — all data-testids present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Bots page", "issues": ["Seeded demo initially listed 'Alpha Momentum' in server.py bootstrap, but running app shows 'Main Bot' (from _migrate_orphan_returns) alongside 'Grid EUR/USD' and 'Scalper v2'. Cosmetic only — orphan-return migration renamed the first bot for a legacy user. New profiles get an empty fleet as expected."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py: get_settings/update_settings + dashboard rely on user['usd_to_eur'] from token-scoped fetch — OK. Consider using response_model for stronger contracts.",
+    "server.py is a single ~700 line file; still manageable but approaching the recommended split threshold.",
+    "delete_profile has no auth (any caller can delete any profile by id). Not in scope of this iteration's features but worth flagging.",
+    "bots_overview aggregates bot_returns with user_id filter — correct, avoids leaking across profiles."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% of tested flows"},
+  "test_credentials": "Passwordless profile selector. Use 'Alex Demo' profile from GET /api/profiles → POST /api/auth/select.",
+  "seed_data_creation": "Tests create ephemeral TEST_ prefixed profiles/bots/returns/savings/income/expenses and clean them up.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend routes verified: /api/bots/overview correctly resolves before /api/bots/{id}. All CRUD + isolation confirmed. Frontend data-testids used: profile-list, nav-bots, add-bot-button, bot-open-<id>, bot-status-<id>, savings-form, income-form, expense-form, tab-income, tab-expenses — all present and working. Backend test file at /app/backend/tests/backend_test.py can be reused as regression."
+}
