@@ -1,0 +1,26 @@
+{
+  "summary": "Iteration 2 — tested the 4 new features (Savings Goals, Recurring Expenses, Best Bot of the Month badge, Export CSV) plus regression. Backend: 5 new pytest tests + 11 regression tests all green (16/16). Frontend: goals full CRUD with progress bar + goal money isolation from general balance (verified in UI: general 'Current Balance' unchanged after +300/−100 to a goal), recurring expenses card creates + materializes into ledger + pause toggle + delete all work, exactly one 'Best this month' badge shown on Bots page, Compare chart toggle works, and both Export CSV and Export JSON buttons trigger downloads with correct filenames.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_iter2.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py has grown to ~990 lines — still readable but nearing the 'split into modules' threshold; recurring/goal helpers are good candidates to extract.",
+    "GET /api/savings filters {goal_id: None} which correctly matches both null and missing fields in MongoDB — verified by isolation test.",
+    "Route ordering is correct: /savings/goals and /expenses/recurring declared before /savings/{tx_id} and /expenses/{item_id} respectively.",
+    "delete_profile purges bots/funds/etc. but does NOT purge new collections savings_goals / recurring_expense / recurring_income — orphaned rows remain in DB after profile deletion (pre-existing pattern; low-risk since profile_id is scoped anyway, but worth cleaning up).",
+    "_materialize_recurring_expenses and _materialize_recurring share nearly identical logic — could be DRY'd into one helper parametrised by collection."
+  ],
+  "updated_files": ["/app/backend/tests/test_new_features.py"],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% of tested flows"},
+  "test_credentials": "Passwordless — GET /api/profiles → POST /api/auth/select with the 'Alex Demo' profile id.",
+  "seed_data_creation": "Ephemeral TEST_-prefixed profile (isolated), TEST_ goals/recurring/bots — all cleaned up after tests.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Frontend routes use /cashflow (no dash) and /savings. Best-badge testid pattern: best-badge-<botId>. Recurring expense category is a shadcn Select — click the trigger, wait 400ms, then click 'div[role=option]:has-text(\"<Category>\")' with force=True. Downloads captured via page.expect_download. All 16 backend pytest tests remain green; both test files are safe to reuse as regression.",
+  "rca of the issue": "N/A — no issues found."
+}
