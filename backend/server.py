@@ -15,6 +15,7 @@ from bson import ObjectId
 import logging
 import jwt
 import random
+import calendar
 
 # ---------------------------------------------------------------------------
 # DB / config
@@ -130,6 +131,19 @@ class IncomeInput(BaseModel):
     amount_eur: float
     date: str
     description: Optional[str] = ""
+
+
+class RecurringIncomeInput(BaseModel):
+    amount_eur: float
+    day: int = 1
+    description: Optional[str] = "Salary"
+
+
+class RecurringIncomeUpdate(BaseModel):
+    amount_eur: Optional[float] = None
+    day: Optional[int] = None
+    description: Optional[str] = None
+    active: Optional[bool] = None
 
 
 class SavingsInput(BaseModel):
@@ -297,6 +311,27 @@ async def bots_overview(user: dict = Depends(get_current_user)):
         bot_summaries.append({"id": str(b["_id"]), "name": b["name"], "status": b.get("status", "active"),
                               "cumulative_usd": st["cumulative_usd"], "daily_avg_usd": st["daily_avg_usd"],
                               "this_month_usd": st["this_month_usd"], "count": st["count"]})
+
+    # compare: per-bot cumulative (carry-forward) across the union of all dates
+    all_dates = sorted({r["date"] for r in all_returns})
+    bot_daily = {}
+    for b in bots:
+        bid = str(b["_id"])
+        d_map = {}
+        for r in all_returns:
+            if r["bot_id"] == bid:
+                d_map[r["date"]] = d_map.get(r["date"], 0.0) + r["amount_usd"]
+        bot_daily[bid] = d_map
+    compare = []
+    running = {str(b["_id"]): 0.0 for b in bots}
+    for d in all_dates:
+        row = {"date": d}
+        for b in bots:
+            bid = str(b["_id"])
+            running[bid] += bot_daily[bid].get(d, 0.0)
+            row[bid] = round(running[bid], 2)
+        compare.append(row)
+
     return {
         "usd_to_eur": rate,
         "total_cumulative_usd": stats["cumulative_usd"],
@@ -307,6 +342,7 @@ async def bots_overview(user: dict = Depends(get_current_user)):
         "active_count": active,
         "paused_count": len(bots) - active,
         "series": series,
+        "compare": compare,
         "bots": bot_summaries,
     }
 
@@ -470,11 +506,94 @@ async def delete_savings(tx_id: str, user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @api_router.get("/income")
 async def list_income(user: dict = Depends(get_current_user)):
+    await _materialize_recurring(user["id"])
     docs = await db.income.find({"user_id": user["id"]}).sort("date", -1).to_list(3000)
     this_month = datetime.now(timezone.utc).strftime("%Y-%m")
     month_total = sum(d["amount_eur"] for d in docs if d["date"][:7] == this_month)
     total = sum(d["amount_eur"] for d in docs)
     return {"month_total_eur": round(month_total, 2), "total_eur": round(total, 2), "items": [serialize(d) for d in docs]}
+
+
+def _month_iter(start_ym: str, end_ym: str):
+    y, m = int(start_ym[:4]), int(start_ym[5:7])
+    ey, em = int(end_ym[:4]), int(end_ym[5:7])
+    while (y, m) <= (ey, em):
+        yield f"{y:04d}-{m:02d}"
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+
+async def _materialize_recurring(uid: str):
+    templates = await db.recurring_income.find({"user_id": uid, "active": True}).to_list(100)
+    if not templates:
+        return
+    current_ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    for t in templates:
+        start_ym = t.get("start_month", current_ym)
+        day = max(1, min(int(t.get("day", 1)), 28))
+        for ym in _month_iter(start_ym, current_ym):
+            exists = await db.income.find_one({"user_id": uid, "recurring_id": str(t["_id"]), "month": ym})
+            if exists:
+                continue
+            last_day = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
+            d = f"{ym}-{min(day, last_day):02d}"
+            await db.income.insert_one({
+                "user_id": uid, "amount_eur": t["amount_eur"], "date": d,
+                "description": t.get("description", "Salary"), "recurring_id": str(t["_id"]),
+                "month": ym, "created_at": now_iso(),
+            })
+
+
+@api_router.get("/income/recurring")
+async def list_recurring(user: dict = Depends(get_current_user)):
+    docs = await db.recurring_income.find({"user_id": user["id"]}).sort("created_at", 1).to_list(100)
+    return [{"id": str(d["_id"]), "amount_eur": d["amount_eur"], "day": d.get("day", 1),
+             "description": d.get("description", "Salary"), "active": d.get("active", True),
+             "start_month": d.get("start_month")} for d in docs]
+
+
+@api_router.post("/income/recurring")
+async def create_recurring(payload: RecurringIncomeInput, user: dict = Depends(get_current_user)):
+    doc = {"user_id": user["id"], "amount_eur": payload.amount_eur,
+           "day": max(1, min(payload.day, 28)), "description": payload.description or "Salary",
+           "active": True, "start_month": datetime.now(timezone.utc).strftime("%Y-%m"), "created_at": now_iso()}
+    await db.recurring_income.insert_one(doc)
+    await _materialize_recurring(user["id"])
+    return await list_recurring(user)
+
+
+@api_router.put("/income/recurring/{rec_id}")
+async def update_recurring(rec_id: str, payload: RecurringIncomeUpdate, user: dict = Depends(get_current_user)):
+    upd = {}
+    if payload.amount_eur is not None:
+        upd["amount_eur"] = payload.amount_eur
+    if payload.day is not None:
+        upd["day"] = max(1, min(payload.day, 28))
+    if payload.description is not None:
+        upd["description"] = payload.description
+    if payload.active is not None:
+        upd["active"] = payload.active
+    r = await db.recurring_income.update_one({"_id": ObjectId(rec_id), "user_id": user["id"]}, {"$set": upd})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    # keep already-generated entries in sync with the new amount/description
+    if "amount_eur" in upd or "description" in upd:
+        sync = {k: upd[k] for k in ("amount_eur", "description") if k in upd}
+        await db.income.update_many({"user_id": user["id"], "recurring_id": rec_id}, {"$set": sync})
+    await _materialize_recurring(user["id"])
+    return await list_recurring(user)
+
+
+@api_router.delete("/income/recurring/{rec_id}")
+async def delete_recurring(rec_id: str, user: dict = Depends(get_current_user)):
+    r = await db.recurring_income.delete_one({"_id": ObjectId(rec_id), "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    # remove auto-generated entries for this template
+    await db.income.delete_many({"user_id": user["id"], "recurring_id": rec_id})
+    return await list_recurring(user)
 
 
 @api_router.post("/income")

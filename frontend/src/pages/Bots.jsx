@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 import { Plus, Bot as BotIcon, TrendingUp, Activity, CalendarDays, Pencil, Trash2, ChevronRight, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
@@ -23,6 +23,8 @@ export default function Bots() {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [edit, setEdit] = useState(null);
+  const [chartMode, setChartMode] = useState("combined");
+  const BOT_PALETTE = ["#3B82F6", "#10B981", "#F59E0B", "#6366F1", "#F43F5E", "#0EA5E9", "#8B5CF6", "#14B8A6"];
 
   const load = useCallback(async () => {
     const { data } = await api.get("/bots/overview");
@@ -98,19 +100,42 @@ export default function Bots() {
       </div>
 
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} data-testid="fleet-chart" className="card-soft mb-6 p-5">
-        <h3 className="mb-4 font-heading text-lg font-semibold text-zinc-900">Combined Performance</h3>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <h3 className="font-heading text-lg font-semibold text-zinc-900">
+            {chartMode === "combined" ? "Combined Performance" : "Compare Bots"}
+          </h3>
+          <div className="flex gap-1.5 rounded-lg bg-zinc-100 p-1">
+            <button data-testid="chart-mode-combined" onClick={() => setChartMode("combined")}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${chartMode === "combined" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-900"}`}>Combined</button>
+            <button data-testid="chart-mode-compare" onClick={() => setChartMode("compare")}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${chartMode === "compare" ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-900"}`}>Compare</button>
+          </div>
+        </div>
         {ov.series.length === 0 ? (
           <div className="flex h-[260px] items-center justify-center rounded-lg border border-dashed border-zinc-200 text-sm text-zinc-400">
             Add returns to your bots to see the fleet curve.
           </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={260}>
+        ) : chartMode === "combined" ? (
+          <ResponsiveContainer width="100%" height={280}>
             <LineChart data={ov.series} margin={{ left: -14, right: 8, top: 4 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#f1f1f4" vertical={false} />
               <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#a1a1aa" }} tickLine={false} axisLine={false} minTickGap={30} />
               <YAxis tick={{ fontSize: 11, fill: "#a1a1aa" }} tickLine={false} axisLine={false} width={54} tickFormatter={(v) => `$${v}`} />
               <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e4e4e7", fontSize: 12 }} formatter={(v) => [fmtUSD(v), "Cumulative"]} labelFormatter={(l) => shortDate(l)} />
               <Line type="monotone" dataKey="cumulative_usd" stroke="#3B82F6" strokeWidth={2.5} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <ResponsiveContainer width="100%" height={280} data-testid="compare-chart">
+            <LineChart data={ov.compare} margin={{ left: -14, right: 8, top: 4 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f1f1f4" vertical={false} />
+              <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#a1a1aa" }} tickLine={false} axisLine={false} minTickGap={30} />
+              <YAxis tick={{ fontSize: 11, fill: "#a1a1aa" }} tickLine={false} axisLine={false} width={54} tickFormatter={(v) => `$${v}`} />
+              <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e4e4e7", fontSize: 12 }} formatter={(v, n) => [fmtUSD(v), n]} labelFormatter={(l) => shortDate(l)} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {ov.bots.map((b, i) => (
+                <Line key={b.id} type="monotone" dataKey={b.id} name={b.name} stroke={BOT_PALETTE[i % BOT_PALETTE.length]} strokeWidth={2} dot={false} strokeDasharray={b.status === "paused" ? "5 4" : undefined} />
+              ))}
             </LineChart>
           </ResponsiveContainer>
         )}

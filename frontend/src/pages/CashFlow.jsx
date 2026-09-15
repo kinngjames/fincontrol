@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { motion } from "framer-motion";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
-import { Plus, Pencil, Trash2, Loader2, ArrowUpRight, ArrowDownRight } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, ArrowUpRight, ArrowDownRight, RefreshCw, CalendarClock } from "lucide-react";
 import { PageHeader } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
@@ -36,9 +36,45 @@ function IncomePanel() {
   const [form, setForm] = useState({ amount_eur: "", date: todayStr(), description: "" });
   const [saving, setSaving] = useState(false);
   const [edit, setEdit] = useState(null);
+  const [recurring, setRecurring] = useState([]);
+  const [recForm, setRecForm] = useState({ amount_eur: "", day: "1", description: "Salary" });
+  const [recAdding, setRecAdding] = useState(false);
 
-  const load = useCallback(async () => setData((await api.get("/income")).data), []);
+  const load = useCallback(async () => {
+    const [inc, rec] = await Promise.all([api.get("/income"), api.get("/income/recurring")]);
+    setData(inc.data);
+    setRecurring(rec.data);
+  }, []);
   useEffect(() => { load(); }, [load]);
+
+  const addRecurring = async (e) => {
+    e.preventDefault();
+    if (recForm.amount_eur === "") return;
+    setRecAdding(true);
+    try {
+      await api.post("/income/recurring", {
+        amount_eur: parseFloat(recForm.amount_eur),
+        day: parseInt(recForm.day || "1", 10),
+        description: recForm.description || "Salary",
+      });
+      setRecForm({ amount_eur: "", day: "1", description: "Salary" });
+      toast.success("Recurring income added");
+      load();
+    } catch (err) { toast.error(apiErr(err.response?.data?.detail)); }
+    finally { setRecAdding(false); }
+  };
+
+  const toggleRecurring = async (r) => {
+    await api.put(`/income/recurring/${r.id}`, { active: !r.active });
+    toast.success(r.active ? "Paused" : "Resumed");
+    load();
+  };
+
+  const deleteRecurring = async (id) => {
+    await api.delete(`/income/recurring/${id}`);
+    toast.success("Recurring income removed");
+    load();
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -86,6 +122,44 @@ function IncomePanel() {
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />} Add Income
           </Button>
         </motion.form>
+
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05 }} data-testid="recurring-card" className="card-soft space-y-3 p-5">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="h-4 w-4 text-zinc-500" />
+            <h3 className="font-heading text-lg font-semibold text-zinc-900">Recurring (Salary)</h3>
+          </div>
+          <p className="text-xs text-zinc-500">Auto-adds this income on the same day every month.</p>
+
+          {recurring.map((r) => (
+            <div key={r.id} data-testid={`recurring-item-${r.id}`} className="flex items-center justify-between rounded-lg border border-zinc-200 px-3 py-2">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-zinc-900">{r.description}</div>
+                <div className="text-xs text-zinc-400">{fmtEUR(r.amount_eur)} · day {r.day}</div>
+              </div>
+              <div className="flex items-center gap-1">
+                <button data-testid={`recurring-toggle-${r.id}`} onClick={() => toggleRecurring(r)}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium ${r.active ? "bg-emerald-50 text-emerald-600" : "bg-zinc-100 text-zinc-500"}`}>
+                  {r.active ? "Active" : "Paused"}
+                </button>
+                <button data-testid={`recurring-delete-${r.id}`} onClick={() => deleteRecurring(r.id)} className="rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-500"><Trash2 className="h-4 w-4" /></button>
+              </div>
+            </div>
+          ))}
+
+          <form onSubmit={addRecurring} data-testid="recurring-form" className="space-y-2 border-t border-zinc-100 pt-3">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">€</span>
+                <Input type="number" step="0.01" data-testid="recurring-amount-input" className="pl-7" placeholder="Amount" value={recForm.amount_eur} onChange={(e) => setRecForm({ ...recForm, amount_eur: e.target.value })} required />
+              </div>
+              <Input type="number" min="1" max="28" data-testid="recurring-day-input" className="w-20" placeholder="Day" value={recForm.day} onChange={(e) => setRecForm({ ...recForm, day: e.target.value })} />
+            </div>
+            <Input data-testid="recurring-desc-input" placeholder="Description (e.g. Salary)" value={recForm.description} onChange={(e) => setRecForm({ ...recForm, description: e.target.value })} />
+            <Button type="submit" disabled={recAdding} data-testid="recurring-submit-button" variant="outline" className="w-full">
+              {recAdding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />} Add Recurring
+            </Button>
+          </form>
+        </motion.div>
       </div>
 
       <div className="card-soft p-5 lg:col-span-2" data-testid="income-ledger">
