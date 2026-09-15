@@ -1,0 +1,18 @@
+{
+  "short_name": "FinControl",
+  "name": "FinControl — Personal Investment & Finance",
+  "description": "Track your trading bot, funds and expenses with consolidated EUR totals.",
+  "icons": [
+    {
+      "src": "icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": ".",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#FAFAFA",
+  "background_color": "#FFFFFF"
+}

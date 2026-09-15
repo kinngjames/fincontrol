@@ -1,0 +1,186 @@
+{
+  "project_name": "FinControl",
+  "app_type": "hybrid_fullstack",
+  "archetype": "ARCHETYPE 4: SWISS & HIGH-CONTRAST + ARCHETYPE 1: ORGANIC & EARTHY (Clean Light Minimal)",
+  "emotional_tone": "Swiss precision, financial clarity, trustworthy, effortless tactile utility",
+  "theme": "light",
+  "identity_and_vision": {
+    "concept": "FinControl is an executive personal investment & finance engine. It blends Swiss architectural precision with soft tactile neutrals, delivering maximum scannability and instant financial clarity across desktop and iPhone PWA views.",
+    "core_principles": [
+      "Tactical Minimalism: Crisp 1px subtle borders, zero unnecessary card shadows, high scannability.",
+      "Dual-Currency Harmony: Clear distinction between Trading Bot USD operations and EUR Funds/Expenses, backed by real-time converted EUR consolidated totals.",
+      "Mobile-First PWA Precision: Native mobile bottom tab navigation with haptic micro-interactions, turning desktop power into pocket agility.",
+      "Restrained Color Intent: 95% monochrome neutral backbone; emerald green reserved strictly for positive gain, rose for spend/loss, and subtle indigo for bot metrics."
+    ]
+  },
+  "color_palette": {
+    "background": {
+      "default": "#FAFAFA",
+      "surface": "#FFFFFF",
+      "subtle": "#F4F4F5",
+      "muted": "#E4E4E7"
+    },
+    "text": {
+      "primary": "#09090B",
+      "secondary": "#52525B",
+      "muted": "#71717A",
+      "inverse": "#FFFFFF"
+    },
+    "accent_and_brand": {
+      "primary": "#09090B",
+      "primary_hover": "#27272A",
+      "success_gain": "#10B981",
+      "success_gain_light": "#ECFDF5",
+      "warning_spend": "#F43F5E",
+      "warning_spend_light": "#FFF1F2",
+      "trading_usd_badge": "#3B82F6",
+      "trading_usd_light": "#EFF6FF",
+      "funds_eur_badge": "#10B981",
+      "funds_eur_light": "#ECFDF5"
+    },
+    "borders": {
+      "default": "#E4E4E7",
+      "strong": "#D4D4D8",
+      "active": "#18181B"
+    },
+    "chart_colors": {
+      "emerald": "#10B981",
+      "indigo": "#6366F1",
+      "amber": "#F59E0B",
+      "rose": "#F43F5E",
+      "slate": "#64748B"
+    }
+  },
+  "typography": {
+    "font_family_heading": "Cabinet Grotesk, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    "font_family_body": "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
+    "font_family_mono": "JetBrains Mono, Menlo, monospace",
+    "scale": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight text-zinc-900",
+      "h2": "text-xl sm:text-2xl lg:text-3xl font-bold tracking-tight text-zinc-900",
+      "h3": "text-lg sm:text-xl font-semibold tracking-tight text-zinc-900",
+      "h4": "text-base sm:text-lg font-medium text-zinc-900",
+      "body": "text-sm sm:text-base font-normal leading-relaxed text-zinc-600",
+      "body_small": "text-xs sm:text-sm text-zinc-500",
+      "label": "text-xs font-semibold uppercase tracking-wider text-zinc-400"
+    }
+  },
+  "layout_and_spacing": {
+    "desktop_navigation": "Fixed left sidebar (width: 260px) with logo, user profile badge, navigation links with active pill states, currency rate preview, and logout button.",
+    "mobile_navigation": "Fixed bottom tab bar with 5 key tab triggers (Dashboard, Trading Bot, Funds, Expenses, Settings) featuring smooth icon highlights and active underline indicator.",
+    "dashboard_grid": {
+      "mode": "High Density Grid (Bento Mode B)",
+      "container": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6 p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto",
+      "kpi_cards": "col-span-1 border border-zinc-200 bg-white rounded-xl p-5 shadow-xs transition-all hover:border-zinc-300",
+      "main_chart": "col-span-1 md:col-span-2 lg:col-span-3 border border-zinc-200 bg-white rounded-xl p-6 shadow-xs",
+      "side_widget": "col-span-1 md:col-span-1 row-span-2 border border-zinc-200 bg-white rounded-xl p-6 shadow-xs"
+    }
+  },
+  "pwa_and_mobile_specifications": {
+    "manifest": "PWA webmanifest configured with theme_color #FAFAFA, background_color #FFFFFF, display standalone, short_name FinControl.",
+    "safe_areas": "Use env(safe-area-inset-bottom) padding on mobile bottom navigation to protect iPhone home indicator.",
+    "touch_targets": "Minimum 44px height for interactive buttons, table actions, and form controls on touch screens."
+  },
+  "component_guidelines": {
+    "cards": "Cardless or subtle 1px border cards (`border border-zinc-200 bg-white rounded-xl`). Avoid heavy drop shadows; rely on crisp internal padding (`p-5` or `p-6`) and alignment.",
+    "buttons": "Pill-shaped or rounded-lg with sharp interaction feedback. Primary: `bg-zinc-900 text-white hover:bg-zinc-800 active:scale-[0.98] transition-all`. Secondary: `border border-zinc-200 bg-white text-zinc-900 hover:bg-zinc-50`.",
+    "tables": "Clean, dense data tables with subtle row dividers (`border-b border-zinc-100`), inline action buttons (edit/delete), and badge tags for USD/EUR currencies.",
+    "inputs_and_forms": "Use Shadcn Input/Select with high visibility focus rings (`focus-visible:ring-2 focus-visible:ring-zinc-900 focus-visible:ring-offset-1`). Include currency prefix icons ($ or €) on monetary inputs.",
+    "disclaimer_banner": "Noticeable yet elegant informational card with soft amber outline (`bg-amber-50/60 border border-amber-200/80 text-amber-900 rounded-lg p-4 text-xs`). Must state: 'Estimates & projections are for informational purposes only and do not constitute financial advice.'"
+  },
+  "key_pages_and_flows": {
+    "auth_screens": {
+      "path": "/login and /register",
+      "design": "Centered minimal card on soft background with dual toggle (Sign In / Create Account), email/password inputs, validation errors using Sonner toasts, and immediate demo credentials shortcut for rapid evaluator testing."
+    },
+    "dashboard": {
+      "path": "/dashboard",
+      "widgets": [
+        "Consolidated EUR Total Net Worth KPI (Funds EUR + Trading Bot converted EUR - Total Expenses EUR)",
+        "Trading Bot Profit KPI (converted EUR with USD tooltip)",
+        "Total Saved Funds KPI (EUR)",
+        "Total Monthly Expenses KPI (EUR with 5-category quick gauge)",
+        "Portfolio Performance Overview Chart (Recharts AreaChart in EUR)",
+        "Recent Returns & Transactions Stream",
+        "Quick Action Modal triggers (+ Log Daily Bot Return, + Record Fund Contribution, + Add Expense)"
+      ]
+    },
+    "trading_bot_section": {
+      "path": "/trading-bot",
+      "currency": "USD ($)",
+      "features": [
+        "Daily USD Return Logger form (Date + Daily Profit/Loss USD)",
+        "Cumulative USD Profit Card & Daily Average Return",
+        "Monthly USD Return % Breakdown table",
+        "Historical Performance Line Chart with interactive tooltips",
+        "Monthly Projections Calculator widget (configurable 3, 6, 12 month projections based on average daily return)",
+        "Editable Daily Entry logs table"
+      ]
+    },
+    "funds_section": {
+      "path": "/funds",
+      "currency": "EUR (€)",
+      "features": [
+        "Fund Creation Card (Fund Name, Initial Contribution, Date, Current Value)",
+        "Cumulative Return % badge per fund",
+        "Contribution log history per fund (date, amount, note)",
+        "Value History Chart over time (Line/Bar toggle)",
+        "Editable Current Value & Quick Contribution Logger"
+      ]
+    },
+    "expenses_section": {
+      "path": "/expenses",
+      "currency": "EUR (€)",
+      "fixed_categories": ["Food", "Transport", "Leisure", "Housing", "Other"],
+      "features": [
+        "Add Expense Form (Amount EUR, Category selection, Date, Description)",
+        "Category Breakdown Pie/Donut Chart",
+        "Category Budget Progress bars",
+        "Filterable & Editable Expense Ledger table"
+      ]
+    },
+    "settings_section": {
+      "path": "/settings",
+      "features": [
+        "Editable Exchange Rate handler (USD → EUR, default 1 USD = 0.92 EUR)",
+        "Live conversion test calculator",
+        "User Profile info & Password update",
+        "Data Export (JSON/CSV download option)"
+      ]
+    }
+  },
+  "motion_and_interactions": {
+    "page_transitions": "Framer Motion layout animations with `initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} `.",
+    "hover_states": "Subtle translate lift (`-translate-y-0.5`) and background tint on interactive rows and cards.",
+    "active_states": "Button tap compression (`active:scale-[0.98]`).",
+    "toast_notifications": "Sonner toasts for record creation, editing, deletion, and exchange rate updates."
+  },
+  "accessibility_and_contrast": {
+    "data_testid": "MANDATORY on all key interactive elements (e.g., `data-testid=\"bot-return-submit-button\"`, `data-testid=\"expense-category-select\"`, `data-testid=\"consolidated-eur-total\"`).",
+    "contrast_ratio": "APCA AA standard; black text (#09090B) on crisp white (#FFFFFF) background provides high visibility.",
+    "focus_states": "High contrast ring indicators for keyboard users."
+  },
+  "image_urls": {
+    "dashboard_hero_bg": "https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?crop=entropy&cs=srgb&fm=jpg&q=85",
+    "chart_abstract_bg": "https://images.unsplash.com/photo-1689732888407-310424e3a372?crop=entropy&cs=srgb&fm=jpg&q=85"
+  },
+  "instructions_to_main_agent": [
+    "Follow the exact 5 expense categories strictly: Food, Transport, Leisure, Housing, Other.",
+    "Always perform monetary consolidation in EUR while respecting native Trading Bot entries in USD.",
+    "Ensure all monetary numbers formatting uses standard localized currency strings (e.g. €1,245.50 / $850.00).",
+    "Add clear disclaimers on both Dashboard and Trading Bot sections stating that projections are estimates and not financial advice.",
+    "Implement persistent storage with full CRUD capabilities (Add, Edit, Delete) for daily returns, fund records, fund contributions, expenses, and exchange rates.",
+    "Support desktop sidebar + mobile bottom tab navigation bar, making it fully installable and responsive as a PWA."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts, simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "You MUST NOT apply universal transition (e.g., transition: all). Exclude transforms from universal transitions.",
+    "You MUST NOT center align the app container. Maintain left-aligned natural typography flow.",
+    "Always use modern button styles (pill-shaped or rounded-lg with interaction animations).",
+    "NEVER use AI assistant Emoji characters (e.g., 🤖🧠💭💡🔮🎯) for icons; use lucide-react icons instead.",
+    "All interactive and key informational elements MUST include a data-testid attribute for robust testing.",
+    "Use sonner for toast notifications."
+  ]
+}
