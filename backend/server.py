@@ -8,16 +8,16 @@ load_dotenv(ROOT_DIR / '.env')
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from pydantic import BaseModel, Field, EmailStr, ConfigDict, BeforeValidator
-from typing import List, Optional, Annotated
+from pydantic import BaseModel, Field
+from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 import logging
-import bcrypt
 import jwt
+import random
 
 # ---------------------------------------------------------------------------
-# DB
+# DB / config
 # ---------------------------------------------------------------------------
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -32,30 +32,14 @@ api_router = APIRouter(prefix="/api")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("fincontrol")
 
+CATEGORIES = ["Food", "Transport", "Leisure", "Housing", "Other"]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-PyObjectId = Annotated[str, BeforeValidator(str)]
-
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-
-def verify_password(plain: str, hashed: str) -> bool:
-    try:
-        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
-    except Exception:
-        return False
-
-
-def create_access_token(user_id: str, email: str) -> str:
-    payload = {
-        "sub": user_id,
-        "email": email,
-        "exp": datetime.now(timezone.utc) + timedelta(days=7),
-        "type": "access",
-    }
+def create_access_token(user_id: str) -> str:
+    payload = {"sub": user_id, "exp": datetime.now(timezone.utc) + timedelta(days=30), "type": "access"}
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
@@ -75,7 +59,6 @@ async def get_current_user(request: Request) -> dict:
             raise HTTPException(status_code=401, detail="User not found")
         user["id"] = str(user["_id"])
         user.pop("_id", None)
-        user.pop("password_hash", None)
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
@@ -87,18 +70,36 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def serialize(doc: dict) -> dict:
+    doc = dict(doc)
+    doc["id"] = str(doc.pop("_id"))
+    doc.pop("user_id", None)
+    return doc
+
+
+def public_user(u: dict) -> dict:
+    return {"id": u["id"], "name": u.get("name"), "usd_to_eur": u.get("usd_to_eur", 0.92)}
+
+
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
-class RegisterInput(BaseModel):
+class ProfileInput(BaseModel):
     name: str
-    email: EmailStr
-    password: str
 
 
-class LoginInput(BaseModel):
-    email: EmailStr
-    password: str
+class SelectInput(BaseModel):
+    user_id: str
+
+
+class BotInput(BaseModel):
+    name: str
+    status: Optional[str] = "active"
+
+
+class BotUpdate(BaseModel):
+    name: Optional[str] = None
+    status: Optional[str] = None
 
 
 class BotReturnInput(BaseModel):
@@ -125,67 +126,68 @@ class ExpenseInput(BaseModel):
     description: Optional[str] = ""
 
 
+class IncomeInput(BaseModel):
+    amount_eur: float
+    date: str
+    description: Optional[str] = ""
+
+
+class SavingsInput(BaseModel):
+    type: str  # deposit | withdrawal
+    amount_eur: float
+    date: str
+    note: Optional[str] = ""
+
+
 class SettingsInput(BaseModel):
     usd_to_eur: float
 
 
-CATEGORIES = ["Food", "Transport", "Leisure", "Housing", "Other"]
-
-
-def serialize(doc: dict) -> dict:
-    doc = dict(doc)
-    doc["id"] = str(doc.pop("_id"))
-    doc.pop("user_id", None)
-    return doc
-
-
 # ---------------------------------------------------------------------------
-# Auth routes
+# Profiles / auth
 # ---------------------------------------------------------------------------
-@api_router.post("/auth/register")
-async def register(payload: RegisterInput):
-    email = payload.email.lower()
-    if await db.users.find_one({"email": email}):
-        raise HTTPException(status_code=400, detail="Email already registered")
-    doc = {
-        "name": payload.name,
-        "email": email,
-        "password_hash": hash_password(payload.password),
-        "usd_to_eur": 0.92,
-        "created_at": now_iso(),
-    }
-    res = await db.users.insert_one(doc)
-    uid = str(res.inserted_id)
-    token = create_access_token(uid, email)
-    return {"token": token, "user": {"id": uid, "name": payload.name, "email": email, "usd_to_eur": 0.92}}
+@api_router.get("/profiles")
+async def list_profiles():
+    users = await db.users.find({}).sort("created_at", 1).to_list(200)
+    return [{"id": str(u["_id"]), "name": u.get("name")} for u in users]
 
 
-@api_router.post("/auth/login")
-async def login(payload: LoginInput):
-    email = payload.email.lower()
-    user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+@api_router.post("/profiles")
+async def create_profile(payload: ProfileInput):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
+    res = await db.users.insert_one({"name": name, "usd_to_eur": 0.92, "created_at": now_iso()})
+    return {"id": str(res.inserted_id), "name": name}
+
+
+@api_router.post("/auth/select")
+async def select_profile(payload: SelectInput):
+    user = await db.users.find_one({"_id": ObjectId(payload.user_id)})
+    if not user:
+        raise HTTPException(status_code=404, detail="Profile not found")
     uid = str(user["_id"])
-    token = create_access_token(uid, email)
-    return {
-        "token": token,
-        "user": {"id": uid, "name": user.get("name"), "email": email, "usd_to_eur": user.get("usd_to_eur", 0.92)},
-    }
+    token = create_access_token(uid)
+    return {"token": token, "user": {"id": uid, "name": user.get("name"), "usd_to_eur": user.get("usd_to_eur", 0.92)}}
 
 
 @api_router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
-    return {"id": user["id"], "name": user.get("name"), "email": user.get("email"), "usd_to_eur": user.get("usd_to_eur", 0.92)}
+    return public_user(user)
 
 
-@api_router.post("/auth/logout")
-async def logout(user: dict = Depends(get_current_user)):
+@api_router.delete("/profiles/{profile_id}")
+async def delete_profile(profile_id: str):
+    if await db.users.count_documents({}) <= 1:
+        raise HTTPException(status_code=400, detail="Cannot delete the last profile")
+    await db.users.delete_one({"_id": ObjectId(profile_id)})
+    for coll in ["bots", "bot_returns", "funds", "contributions", "expenses", "income", "savings"]:
+        await db[coll].delete_many({"user_id": profile_id})
     return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
-# Settings (exchange rate)
+# Settings
 # ---------------------------------------------------------------------------
 @api_router.get("/settings")
 async def get_settings(user: dict = Depends(get_current_user)):
@@ -201,64 +203,159 @@ async def update_settings(payload: SettingsInput, user: dict = Depends(get_curre
 
 
 # ---------------------------------------------------------------------------
-# Trading Bot returns (USD)
+# Bots (fleet, USD)
 # ---------------------------------------------------------------------------
-@api_router.get("/bot-returns")
-async def list_bot_returns(user: dict = Depends(get_current_user)):
-    docs = await db.bot_returns.find({"user_id": user["id"]}).sort("date", 1).to_list(2000)
-    return [serialize(d) for d in docs]
+def _bot_stats(returns: List[dict]) -> dict:
+    total = sum(r["amount_usd"] for r in returns)
+    count = len(returns)
+    daily_avg = total / count if count else 0.0
+    monthly = {}
+    for r in returns:
+        k = r["date"][:7]
+        monthly[k] = monthly.get(k, 0.0) + r["amount_usd"]
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    return {
+        "cumulative_usd": round(total, 2),
+        "daily_avg_usd": round(daily_avg, 2),
+        "monthly_avg_usd": round(daily_avg * 30, 2),
+        "this_month_usd": round(monthly.get(this_month, 0.0), 2),
+        "count": count,
+        "monthly": [{"month": k, "amount_usd": round(v, 2)} for k, v in sorted(monthly.items())],
+    }
 
 
-@api_router.post("/bot-returns")
-async def create_bot_return(payload: BotReturnInput, user: dict = Depends(get_current_user)):
-    doc = {"user_id": user["id"], "date": payload.date, "amount_usd": payload.amount_usd,
-           "note": payload.note or "", "created_at": now_iso()}
+async def _get_bot(bot_id: str, uid: str) -> dict:
+    bot = await db.bots.find_one({"_id": ObjectId(bot_id), "user_id": uid})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return bot
+
+
+@api_router.get("/bots")
+async def list_bots(user: dict = Depends(get_current_user)):
+    bots = await db.bots.find({"user_id": user["id"]}).sort("created_at", 1).to_list(200)
+    out = []
+    for b in bots:
+        rets = await db.bot_returns.find({"bot_id": str(b["_id"])}).to_list(3000)
+        out.append({"id": str(b["_id"]), "name": b["name"], "status": b.get("status", "active"), **_bot_stats(rets)})
+    return out
+
+
+@api_router.post("/bots")
+async def create_bot(payload: BotInput, user: dict = Depends(get_current_user)):
+    doc = {"user_id": user["id"], "name": payload.name.strip() or "New Bot",
+           "status": payload.status or "active", "created_at": now_iso()}
+    res = await db.bots.insert_one(doc)
+    return {"id": str(res.inserted_id), "name": doc["name"], "status": doc["status"], **_bot_stats([])}
+
+
+@api_router.put("/bots/{bot_id}")
+async def update_bot(bot_id: str, payload: BotUpdate, user: dict = Depends(get_current_user)):
+    await _get_bot(bot_id, user["id"])
+    upd = {}
+    if payload.name is not None:
+        upd["name"] = payload.name.strip()
+    if payload.status is not None:
+        upd["status"] = payload.status
+    if upd:
+        await db.bots.update_one({"_id": ObjectId(bot_id)}, {"$set": upd})
+    b = await _get_bot(bot_id, user["id"])
+    rets = await db.bot_returns.find({"bot_id": bot_id}).to_list(3000)
+    return {"id": bot_id, "name": b["name"], "status": b.get("status", "active"), **_bot_stats(rets)}
+
+
+@api_router.delete("/bots/{bot_id}")
+async def delete_bot(bot_id: str, user: dict = Depends(get_current_user)):
+    await _get_bot(bot_id, user["id"])
+    await db.bots.delete_one({"_id": ObjectId(bot_id)})
+    await db.bot_returns.delete_many({"bot_id": bot_id})
+    return {"ok": True}
+
+
+@api_router.get("/bots/overview")
+async def bots_overview(user: dict = Depends(get_current_user)):
+    rate = user.get("usd_to_eur", 0.92)
+    bots = await db.bots.find({"user_id": user["id"]}).sort("created_at", 1).to_list(200)
+    all_returns = await db.bot_returns.find({"user_id": user["id"]}).sort("date", 1).to_list(5000)
+    stats = _bot_stats(all_returns)
+    # combined cumulative series by date
+    by_date = {}
+    for r in all_returns:
+        by_date[r["date"]] = by_date.get(r["date"], 0.0) + r["amount_usd"]
+    series = []
+    cum = 0.0
+    for d in sorted(by_date.keys()):
+        cum += by_date[d]
+        series.append({"date": d, "cumulative_usd": round(cum, 2), "cumulative_eur": round(cum * rate, 2)})
+    bot_summaries = []
+    active = 0
+    for b in bots:
+        rets = await db.bot_returns.find({"bot_id": str(b["_id"])}).to_list(3000)
+        st = _bot_stats(rets)
+        if b.get("status", "active") == "active":
+            active += 1
+        bot_summaries.append({"id": str(b["_id"]), "name": b["name"], "status": b.get("status", "active"),
+                              "cumulative_usd": st["cumulative_usd"], "daily_avg_usd": st["daily_avg_usd"],
+                              "this_month_usd": st["this_month_usd"], "count": st["count"]})
+    return {
+        "usd_to_eur": rate,
+        "total_cumulative_usd": stats["cumulative_usd"],
+        "total_cumulative_eur": round(stats["cumulative_usd"] * rate, 2),
+        "total_daily_avg_usd": stats["daily_avg_usd"],
+        "this_month_usd": stats["this_month_usd"],
+        "bot_count": len(bots),
+        "active_count": active,
+        "paused_count": len(bots) - active,
+        "series": series,
+        "bots": bot_summaries,
+    }
+
+
+@api_router.get("/bots/{bot_id}")
+async def bot_detail(bot_id: str, user: dict = Depends(get_current_user)):
+    b = await _get_bot(bot_id, user["id"])
+    rets = await db.bot_returns.find({"bot_id": bot_id}).sort("date", 1).to_list(3000)
+    series = []
+    cum = 0.0
+    for r in rets:
+        cum += r["amount_usd"]
+        series.append({"date": r["date"], "cumulative_usd": round(cum, 2)})
+    return {
+        "id": bot_id, "name": b["name"], "status": b.get("status", "active"),
+        "stats": _bot_stats(rets),
+        "series": series,
+        "returns": [serialize(r) for r in rets],
+    }
+
+
+@api_router.post("/bots/{bot_id}/returns")
+async def add_bot_return(bot_id: str, payload: BotReturnInput, user: dict = Depends(get_current_user)):
+    await _get_bot(bot_id, user["id"])
+    doc = {"user_id": user["id"], "bot_id": bot_id, "date": payload.date,
+           "amount_usd": payload.amount_usd, "note": payload.note or "", "created_at": now_iso()}
     res = await db.bot_returns.insert_one(doc)
     doc["_id"] = res.inserted_id
     return serialize(doc)
 
 
-@api_router.put("/bot-returns/{item_id}")
-async def update_bot_return(item_id: str, payload: BotReturnInput, user: dict = Depends(get_current_user)):
+@api_router.put("/bots/{bot_id}/returns/{ret_id}")
+async def update_bot_return(bot_id: str, ret_id: str, payload: BotReturnInput, user: dict = Depends(get_current_user)):
     r = await db.bot_returns.update_one(
-        {"_id": ObjectId(item_id), "user_id": user["id"]},
+        {"_id": ObjectId(ret_id), "user_id": user["id"], "bot_id": bot_id},
         {"$set": {"date": payload.date, "amount_usd": payload.amount_usd, "note": payload.note or ""}},
     )
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
-    doc = await db.bot_returns.find_one({"_id": ObjectId(item_id)})
+    doc = await db.bot_returns.find_one({"_id": ObjectId(ret_id)})
     return serialize(doc)
 
 
-@api_router.delete("/bot-returns/{item_id}")
-async def delete_bot_return(item_id: str, user: dict = Depends(get_current_user)):
-    r = await db.bot_returns.delete_one({"_id": ObjectId(item_id), "user_id": user["id"]})
+@api_router.delete("/bots/{bot_id}/returns/{ret_id}")
+async def delete_bot_return(bot_id: str, ret_id: str, user: dict = Depends(get_current_user)):
+    r = await db.bot_returns.delete_one({"_id": ObjectId(ret_id), "user_id": user["id"], "bot_id": bot_id})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     return {"ok": True}
-
-
-@api_router.get("/bot-returns/stats")
-async def bot_stats(user: dict = Depends(get_current_user)):
-    docs = await db.bot_returns.find({"user_id": user["id"]}).sort("date", 1).to_list(2000)
-    total = sum(d["amount_usd"] for d in docs)
-    count = len(docs)
-    daily_avg = total / count if count else 0.0
-    monthly = {}
-    for d in docs:
-        key = d["date"][:7]
-        monthly[key] = monthly.get(key, 0.0) + d["amount_usd"]
-    monthly_list = [{"month": k, "amount_usd": round(v, 2)} for k, v in sorted(monthly.items())]
-    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
-    monthly_return = round(monthly.get(this_month, 0.0), 2)
-    return {
-        "cumulative_usd": round(total, 2),
-        "daily_avg_usd": round(daily_avg, 2),
-        "monthly_return_usd": monthly_return,
-        "monthly_avg_usd": round(daily_avg * 30, 2),
-        "count": count,
-        "monthly": monthly_list,
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -269,14 +366,10 @@ async def _fund_payload(fund: dict) -> dict:
     invested = sum(c["amount_eur"] for c in contribs)
     current = fund.get("current_value_eur", 0.0)
     cum_return = current - invested
-    cum_return_pct = (cum_return / invested * 100) if invested else 0.0
     return {
-        "id": str(fund["_id"]),
-        "name": fund["name"],
-        "current_value_eur": current,
-        "invested_eur": round(invested, 2),
-        "cumulative_return_eur": round(cum_return, 2),
-        "cumulative_return_pct": round(cum_return_pct, 2),
+        "id": str(fund["_id"]), "name": fund["name"], "current_value_eur": current,
+        "invested_eur": round(invested, 2), "cumulative_return_eur": round(cum_return, 2),
+        "cumulative_return_pct": round((cum_return / invested * 100) if invested else 0.0, 2),
         "contributions": [serialize(c) for c in contribs],
     }
 
@@ -289,8 +382,7 @@ async def list_funds(user: dict = Depends(get_current_user)):
 
 @api_router.post("/funds")
 async def create_fund(payload: FundInput, user: dict = Depends(get_current_user)):
-    doc = {"user_id": user["id"], "name": payload.name,
-           "current_value_eur": payload.current_value_eur, "created_at": now_iso()}
+    doc = {"user_id": user["id"], "name": payload.name, "current_value_eur": payload.current_value_eur, "created_at": now_iso()}
     res = await db.funds.insert_one(doc)
     doc["_id"] = res.inserted_id
     return await _fund_payload(doc)
@@ -298,10 +390,8 @@ async def create_fund(payload: FundInput, user: dict = Depends(get_current_user)
 
 @api_router.put("/funds/{fund_id}")
 async def update_fund(fund_id: str, payload: FundInput, user: dict = Depends(get_current_user)):
-    r = await db.funds.update_one(
-        {"_id": ObjectId(fund_id), "user_id": user["id"]},
-        {"$set": {"name": payload.name, "current_value_eur": payload.current_value_eur}},
-    )
+    r = await db.funds.update_one({"_id": ObjectId(fund_id), "user_id": user["id"]},
+                                  {"$set": {"name": payload.name, "current_value_eur": payload.current_value_eur}})
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     doc = await db.funds.find_one({"_id": ObjectId(fund_id)})
@@ -322,11 +412,9 @@ async def add_contribution(fund_id: str, payload: ContributionInput, user: dict 
     fund = await db.funds.find_one({"_id": ObjectId(fund_id), "user_id": user["id"]})
     if not fund:
         raise HTTPException(status_code=404, detail="Fund not found")
-    doc = {"user_id": user["id"], "fund_id": fund_id, "amount_eur": payload.amount_eur,
-           "date": payload.date, "note": payload.note or "", "created_at": now_iso()}
-    await db.contributions.insert_one(doc)
-    doc2 = await db.funds.find_one({"_id": ObjectId(fund_id)})
-    return await _fund_payload(doc2)
+    await db.contributions.insert_one({"user_id": user["id"], "fund_id": fund_id, "amount_eur": payload.amount_eur,
+                                       "date": payload.date, "note": payload.note or "", "created_at": now_iso()})
+    return await _fund_payload(await db.funds.find_one({"_id": ObjectId(fund_id)}))
 
 
 @api_router.delete("/funds/{fund_id}/contributions/{contrib_id}")
@@ -334,8 +422,84 @@ async def delete_contribution(fund_id: str, contrib_id: str, user: dict = Depend
     r = await db.contributions.delete_one({"_id": ObjectId(contrib_id), "user_id": user["id"]})
     if r.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
-    doc2 = await db.funds.find_one({"_id": ObjectId(fund_id)})
-    return await _fund_payload(doc2)
+    return await _fund_payload(await db.funds.find_one({"_id": ObjectId(fund_id)}))
+
+
+# ---------------------------------------------------------------------------
+# Savings (EUR)
+# ---------------------------------------------------------------------------
+@api_router.get("/savings")
+async def get_savings(user: dict = Depends(get_current_user)):
+    txs = await db.savings.find({"user_id": user["id"]}).sort("date", 1).to_list(3000)
+    deposits = sum(t["amount_eur"] for t in txs if t["type"] == "deposit")
+    withdrawals = sum(t["amount_eur"] for t in txs if t["type"] == "withdrawal")
+    history = []
+    bal = 0.0
+    for t in txs:
+        bal += t["amount_eur"] if t["type"] == "deposit" else -t["amount_eur"]
+        history.append({"date": t["date"], "balance": round(bal, 2)})
+    txs_sorted = sorted(txs, key=lambda t: t["date"], reverse=True)
+    return {
+        "balance_eur": round(deposits - withdrawals, 2),
+        "total_deposits_eur": round(deposits, 2),
+        "total_withdrawals_eur": round(withdrawals, 2),
+        "history": history,
+        "transactions": [serialize(t) for t in txs_sorted],
+    }
+
+
+@api_router.post("/savings")
+async def add_savings(payload: SavingsInput, user: dict = Depends(get_current_user)):
+    if payload.type not in ("deposit", "withdrawal"):
+        raise HTTPException(status_code=400, detail="Invalid type")
+    await db.savings.insert_one({"user_id": user["id"], "type": payload.type, "amount_eur": abs(payload.amount_eur),
+                                 "date": payload.date, "note": payload.note or "", "created_at": now_iso()})
+    return await get_savings(user)
+
+
+@api_router.delete("/savings/{tx_id}")
+async def delete_savings(tx_id: str, user: dict = Depends(get_current_user)):
+    r = await db.savings.delete_one({"_id": ObjectId(tx_id), "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await get_savings(user)
+
+
+# ---------------------------------------------------------------------------
+# Income (EUR)
+# ---------------------------------------------------------------------------
+@api_router.get("/income")
+async def list_income(user: dict = Depends(get_current_user)):
+    docs = await db.income.find({"user_id": user["id"]}).sort("date", -1).to_list(3000)
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    month_total = sum(d["amount_eur"] for d in docs if d["date"][:7] == this_month)
+    total = sum(d["amount_eur"] for d in docs)
+    return {"month_total_eur": round(month_total, 2), "total_eur": round(total, 2), "items": [serialize(d) for d in docs]}
+
+
+@api_router.post("/income")
+async def create_income(payload: IncomeInput, user: dict = Depends(get_current_user)):
+    await db.income.insert_one({"user_id": user["id"], "amount_eur": payload.amount_eur, "date": payload.date,
+                                "description": payload.description or "", "created_at": now_iso()})
+    return await list_income(user)
+
+
+@api_router.put("/income/{item_id}")
+async def update_income(item_id: str, payload: IncomeInput, user: dict = Depends(get_current_user)):
+    r = await db.income.update_one({"_id": ObjectId(item_id), "user_id": user["id"]},
+                                   {"$set": {"amount_eur": payload.amount_eur, "date": payload.date,
+                                             "description": payload.description or ""}})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await list_income(user)
+
+
+@api_router.delete("/income/{item_id}")
+async def delete_income(item_id: str, user: dict = Depends(get_current_user)):
+    r = await db.income.delete_one({"_id": ObjectId(item_id), "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await list_income(user)
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +507,7 @@ async def delete_contribution(fund_id: str, contrib_id: str, user: dict = Depend
 # ---------------------------------------------------------------------------
 @api_router.get("/expenses")
 async def list_expenses(user: dict = Depends(get_current_user)):
-    docs = await db.expenses.find({"user_id": user["id"]}).sort("date", -1).to_list(2000)
+    docs = await db.expenses.find({"user_id": user["id"]}).sort("date", -1).to_list(3000)
     return [serialize(d) for d in docs]
 
 
@@ -362,11 +526,9 @@ async def create_expense(payload: ExpenseInput, user: dict = Depends(get_current
 async def update_expense(item_id: str, payload: ExpenseInput, user: dict = Depends(get_current_user)):
     if payload.category not in CATEGORIES:
         raise HTTPException(status_code=400, detail="Invalid category")
-    r = await db.expenses.update_one(
-        {"_id": ObjectId(item_id), "user_id": user["id"]},
-        {"$set": {"amount_eur": payload.amount_eur, "category": payload.category,
-                  "date": payload.date, "description": payload.description or ""}},
-    )
+    r = await db.expenses.update_one({"_id": ObjectId(item_id), "user_id": user["id"]},
+                                     {"$set": {"amount_eur": payload.amount_eur, "category": payload.category,
+                                               "date": payload.date, "description": payload.description or ""}})
     if r.matched_count == 0:
         raise HTTPException(status_code=404, detail="Not found")
     doc = await db.expenses.find_one({"_id": ObjectId(item_id)})
@@ -382,22 +544,31 @@ async def delete_expense(item_id: str, user: dict = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
-# Dashboard summary
+# Dashboard
 # ---------------------------------------------------------------------------
 @api_router.get("/dashboard/summary")
 async def dashboard_summary(user: dict = Depends(get_current_user)):
     rate = user.get("usd_to_eur", 0.92)
-    bot_docs = await db.bot_returns.find({"user_id": user["id"]}).sort("date", 1).to_list(2000)
+    uid = user["id"]
+    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+
+    bot_docs = await db.bot_returns.find({"user_id": uid}).sort("date", 1).to_list(5000)
     bot_total_usd = sum(d["amount_usd"] for d in bot_docs)
     bot_total_eur = bot_total_usd * rate
+    bot_count = await db.bots.count_documents({"user_id": uid})
 
-    funds = await db.funds.find({"user_id": user["id"]}).to_list(500)
+    funds = await db.funds.find({"user_id": uid}).to_list(500)
     funds_value_eur = sum(f.get("current_value_eur", 0.0) for f in funds)
 
-    expenses = await db.expenses.find({"user_id": user["id"]}).to_list(2000)
-    this_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    sav = await db.savings.find({"user_id": uid}).to_list(3000)
+    savings_balance = sum(t["amount_eur"] if t["type"] == "deposit" else -t["amount_eur"] for t in sav)
+
+    expenses = await db.expenses.find({"user_id": uid}).to_list(3000)
     month_expenses = sum(e["amount_eur"] for e in expenses if e["date"][:7] == this_month)
     total_expenses = sum(e["amount_eur"] for e in expenses)
+
+    income = await db.income.find({"user_id": uid}).to_list(3000)
+    month_income = sum(i["amount_eur"] for i in income if i["date"][:7] == this_month)
 
     cat = {c: 0.0 for c in CATEGORIES}
     for e in expenses:
@@ -405,22 +576,30 @@ async def dashboard_summary(user: dict = Depends(get_current_user)):
             cat[e["category"]] += e["amount_eur"]
     cat_breakdown = [{"category": k, "amount_eur": round(v, 2)} for k, v in cat.items()]
 
+    # combined bot equity by date (EUR)
+    by_date = {}
+    for r in bot_docs:
+        by_date[r["date"]] = by_date.get(r["date"], 0.0) + r["amount_usd"]
     perf = []
     cum = 0.0
-    for d in bot_docs:
-        cum += d["amount_usd"]
-        perf.append({"date": d["date"], "value_eur": round(cum * rate, 2), "value_usd": round(cum, 2)})
+    for d in sorted(by_date.keys()):
+        cum += by_date[d]
+        perf.append({"date": d, "value_eur": round(cum * rate, 2)})
 
-    net_worth = funds_value_eur + bot_total_eur
+    net_worth = funds_value_eur + savings_balance + bot_total_eur
 
     return {
         "usd_to_eur": rate,
         "net_worth_eur": round(net_worth, 2),
         "bot_profit_usd": round(bot_total_usd, 2),
         "bot_profit_eur": round(bot_total_eur, 2),
+        "bot_count": bot_count,
         "funds_value_eur": round(funds_value_eur, 2),
         "funds_count": len(funds),
+        "savings_balance_eur": round(savings_balance, 2),
+        "month_income_eur": round(month_income, 2),
         "month_expenses_eur": round(month_expenses, 2),
+        "month_net_eur": round(month_income - month_expenses, 2),
         "total_expenses_eur": round(total_expenses, 2),
         "category_breakdown": cat_breakdown,
         "performance": perf,
@@ -439,59 +618,98 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
-# Seeding
+# Bootstrap: migrate + seed demo
 # ---------------------------------------------------------------------------
-async def seed_demo():
-    email = os.environ.get("ADMIN_EMAIL", "demo@fincontrol.app")
-    password = os.environ.get("ADMIN_PASSWORD", "demo1234")
-    existing = await db.users.find_one({"email": email})
-    if existing:
-        if not verify_password(password, existing.get("password_hash", "")):
-            await db.users.update_one({"email": email}, {"$set": {"password_hash": hash_password(password)}})
-        return
-    res = await db.users.insert_one({
-        "name": "Alex Demo", "email": email, "password_hash": hash_password(password),
-        "usd_to_eur": 0.92, "created_at": now_iso(),
-    })
-    uid = str(res.inserted_id)
+def _gen_returns(uid, bot_id, days, lo, hi, seed):
+    random.seed(seed)
+    today = datetime.now(timezone.utc)
+    out = []
+    for i in range(days, 0, -1):
+        d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
+        out.append({"user_id": uid, "bot_id": bot_id, "date": d,
+                    "amount_usd": round(random.uniform(lo, hi), 2), "note": "", "created_at": now_iso()})
+    return out
+
+
+async def _migrate_orphan_returns():
+    users = await db.users.find({}).to_list(500)
+    for u in users:
+        uid = str(u["_id"])
+        orphan = await db.bot_returns.count_documents({"user_id": uid, "bot_id": {"$exists": False}})
+        if orphan:
+            res = await db.bots.insert_one({"user_id": uid, "name": "Main Bot", "status": "active", "created_at": now_iso()})
+            await db.bot_returns.update_many({"user_id": uid, "bot_id": {"$exists": False}},
+                                             {"$set": {"bot_id": str(res.inserted_id)}})
+
+
+async def bootstrap():
+    await db.users.create_index("created_at")
+    email_name = "Alex Demo"
+    demo = await db.users.find_one({"name": email_name})
     today = datetime.now(timezone.utc)
 
-    import random
-    random.seed(7)
-    bot = []
-    for i in range(45, 0, -1):
-        d = (today - timedelta(days=i)).strftime("%Y-%m-%d")
-        amt = round(random.uniform(-18, 55), 2)
-        bot.append({"user_id": uid, "date": d, "amount_usd": amt, "note": "", "created_at": now_iso()})
-    await db.bot_returns.insert_many(bot)
+    if not demo:
+        res = await db.users.insert_one({"name": email_name, "usd_to_eur": 0.92, "created_at": now_iso()})
+        uid = str(res.inserted_id)
+        # funds
+        f1 = await db.funds.insert_one({"user_id": uid, "name": "S&P 500 ETF", "current_value_eur": 8420.0, "created_at": now_iso()})
+        f2 = await db.funds.insert_one({"user_id": uid, "name": "Global Bonds", "current_value_eur": 3150.0, "created_at": now_iso()})
+        contribs = []
+        for m, amt in enumerate([500, 500, 750, 500, 600, 500]):
+            contribs.append({"user_id": uid, "fund_id": str(f1.inserted_id), "amount_eur": amt,
+                             "date": (today - timedelta(days=(6 - m) * 30)).strftime("%Y-%m-%d"), "note": "Monthly buy", "created_at": now_iso()})
+        for m, amt in enumerate([500, 400, 500, 500, 300, 500]):
+            contribs.append({"user_id": uid, "fund_id": str(f2.inserted_id), "amount_eur": amt,
+                             "date": (today - timedelta(days=(6 - m) * 30)).strftime("%Y-%m-%d"), "note": "Monthly buy", "created_at": now_iso()})
+        await db.contributions.insert_many(contribs)
+        # expenses
+        exp = []
+        samples = [("Food", 32.5, "Groceries"), ("Transport", 18.0, "Metro pass"), ("Leisure", 45.0, "Cinema"),
+                   ("Housing", 780.0, "Rent"), ("Other", 25.0, "Subscription"), ("Food", 12.9, "Lunch"),
+                   ("Transport", 40.0, "Fuel"), ("Leisure", 60.0, "Dinner out"), ("Food", 55.2, "Groceries"), ("Other", 15.0, "Pharmacy")]
+        for i, (c, a, desc) in enumerate(samples):
+            exp.append({"user_id": uid, "amount_eur": a, "category": c, "date": (today - timedelta(days=i * 2)).strftime("%Y-%m-%d"),
+                        "description": desc, "created_at": now_iso()})
+        await db.expenses.insert_many(exp)
+    else:
+        uid = str(demo["_id"])
 
-    f1 = await db.funds.insert_one({"user_id": uid, "name": "S&P 500 ETF", "current_value_eur": 8420.0, "created_at": now_iso()})
-    f2 = await db.funds.insert_one({"user_id": uid, "name": "Global Bonds", "current_value_eur": 3150.0, "created_at": now_iso()})
-    contribs = []
-    for m, amt in enumerate([500, 500, 750, 500, 600, 500]):
-        d = (today - timedelta(days=(6 - m) * 30)).strftime("%Y-%m-%d")
-        contribs.append({"user_id": uid, "fund_id": str(f1.inserted_id), "amount_eur": amt, "date": d, "note": "Monthly buy", "created_at": now_iso()})
-    for m, amt in enumerate([500, 400, 500, 500, 300, 500]):
-        d = (today - timedelta(days=(6 - m) * 30)).strftime("%Y-%m-%d")
-        contribs.append({"user_id": uid, "fund_id": str(f2.inserted_id), "amount_eur": amt, "date": d, "note": "Monthly buy", "created_at": now_iso()})
-    await db.contributions.insert_many(contribs)
+    # ensure fleet of bots for demo
+    if await db.bots.count_documents({"user_id": uid}) == 0:
+        b1 = await db.bots.insert_one({"user_id": uid, "name": "Alpha Momentum", "status": "active", "created_at": now_iso()})
+        await db.bot_returns.insert_many(_gen_returns(uid, str(b1.inserted_id), 45, -18, 55, 7))
+    if await db.bots.count_documents({"user_id": uid}) < 3:
+        b2 = await db.bots.insert_one({"user_id": uid, "name": "Grid EUR/USD", "status": "active", "created_at": now_iso()})
+        await db.bot_returns.insert_many(_gen_returns(uid, str(b2.inserted_id), 40, -10, 35, 21))
+        b3 = await db.bots.insert_one({"user_id": uid, "name": "Scalper v2", "status": "paused", "created_at": now_iso()})
+        await db.bot_returns.insert_many(_gen_returns(uid, str(b3.inserted_id), 22, -25, 40, 42))
 
-    exp = []
-    samples = [("Food", 32.5, "Groceries"), ("Transport", 18.0, "Metro pass"), ("Leisure", 45.0, "Cinema"),
-               ("Housing", 780.0, "Rent"), ("Other", 25.0, "Subscription"), ("Food", 12.9, "Lunch"),
-               ("Transport", 40.0, "Fuel"), ("Leisure", 60.0, "Dinner out"), ("Food", 55.2, "Groceries"),
-               ("Other", 15.0, "Pharmacy")]
-    for i, (c, a, desc) in enumerate(samples):
-        d = (today - timedelta(days=i * 2)).strftime("%Y-%m-%d")
-        exp.append({"user_id": uid, "amount_eur": a, "category": c, "date": d, "description": desc, "created_at": now_iso()})
-    await db.expenses.insert_many(exp)
-    logger.info("Seeded demo account")
+    # income
+    if await db.income.count_documents({"user_id": uid}) == 0:
+        inc = []
+        for m in range(3):
+            inc.append({"user_id": uid, "amount_eur": 2500.0, "date": (today - timedelta(days=m * 30)).strftime("%Y-%m-%d"),
+                        "description": "Salary", "created_at": now_iso()})
+        inc.append({"user_id": uid, "amount_eur": 400.0, "date": (today - timedelta(days=10)).strftime("%Y-%m-%d"),
+                    "description": "Freelance project", "created_at": now_iso()})
+        await db.income.insert_many(inc)
+
+    # savings
+    if await db.savings.count_documents({"user_id": uid}) == 0:
+        sv = []
+        for m, amt in enumerate([600, 600, 800, 500, 700, 600]):
+            sv.append({"user_id": uid, "type": "deposit", "amount_eur": amt,
+                       "date": (today - timedelta(days=(6 - m) * 30)).strftime("%Y-%m-%d"), "note": "Monthly saving", "created_at": now_iso()})
+        sv.append({"user_id": uid, "type": "withdrawal", "amount_eur": 400.0,
+                   "date": (today - timedelta(days=20)).strftime("%Y-%m-%d"), "note": "Emergency repair", "created_at": now_iso()})
+        await db.savings.insert_many(sv)
 
 
 @app.on_event("startup")
 async def startup():
-    await db.users.create_index("email", unique=True)
-    await seed_demo()
+    await _migrate_orphan_returns()
+    await bootstrap()
+    logger.info("FinControl bootstrap complete")
 
 
 @app.on_event("shutdown")

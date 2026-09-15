@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell,
 } from "recharts";
-import { Wallet, Bot, Landmark, Receipt, Loader2 } from "lucide-react";
+import { Wallet, Bot, Landmark, PiggyBank, ArrowDownRight, ArrowUpRight, Scale, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
 import { Disclaimer } from "@/components/Disclaimer";
@@ -19,76 +18,36 @@ export default function Dashboard() {
   }, []);
 
   if (!data)
-    return (
-      <div className="flex h-[60vh] items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-zinc-400" />
-      </div>
-    );
+    return <div className="flex h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>;
 
   const catData = data.category_breakdown.filter((c) => c.amount_eur > 0);
   const perf = data.performance;
 
   return (
     <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
-      <PageHeader
-        title="Dashboard"
-        subtitle={`Consolidated in EUR · rate 1 USD = ${data.usd_to_eur} EUR`}
-      />
+      <PageHeader title="Dashboard" subtitle={`Consolidated in EUR · 1 USD = ${data.usd_to_eur} EUR`} />
 
-      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          testid="stat-net-worth"
-          label="Net Worth"
-          value={fmtEUR(data.net_worth_eur)}
-          sub="Funds + Bot profit (EUR)"
-          accent="ink"
-          icon={Wallet}
-          delay={0}
-        />
-        <StatCard
-          testid="stat-bot-profit"
-          label="Bot Profit"
-          value={fmtEUR(data.bot_profit_eur)}
-          sub={`${fmtUSD(data.bot_profit_usd)} converted`}
-          accent={data.bot_profit_eur >= 0 ? "gain" : "spend"}
-          icon={Bot}
-          delay={0.05}
-        />
-        <StatCard
-          testid="stat-funds-value"
-          label="Funds Value"
-          value={fmtEUR(data.funds_value_eur)}
-          sub={`${data.funds_count} fund${data.funds_count === 1 ? "" : "s"}`}
-          accent="gain"
-          icon={Landmark}
-          delay={0.1}
-        />
-        <StatCard
-          testid="stat-month-expenses"
-          label="This Month Spend"
-          value={fmtEUR(data.month_expenses_eur)}
-          sub={`${fmtEUR(data.total_expenses_eur)} all time`}
-          accent="spend"
-          icon={Receipt}
-          delay={0.15}
-        />
+      <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard testid="stat-net-worth" label="Net Worth" value={fmtEUR(data.net_worth_eur)} sub="Funds + Savings + Bots" accent="ink" icon={Wallet} delay={0} />
+        <StatCard testid="stat-savings" label="Savings" value={fmtEUR(data.savings_balance_eur)} sub="Capital set aside" accent="gain" icon={PiggyBank} delay={0.05} />
+        <StatCard testid="stat-funds-value" label="Funds Value" value={fmtEUR(data.funds_value_eur)} sub={`${data.funds_count} fund${data.funds_count === 1 ? "" : "s"}`} accent="gain" icon={Landmark} delay={0.1} />
+        <StatCard testid="stat-bot-profit" label="Bot Profit" value={fmtEUR(data.bot_profit_eur)} sub={`${fmtUSD(data.bot_profit_usd)} · ${data.bot_count} bots`} accent={data.bot_profit_eur >= 0 ? "gain" : "spend"} icon={Bot} delay={0.15} />
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <StatCard testid="stat-income" label="Income (month)" value={fmtEUR(data.month_income_eur)} accent="gain" icon={ArrowUpRight} />
+        <StatCard testid="stat-expenses" label="Expenses (month)" value={fmtEUR(data.month_expenses_eur)} accent="spend" icon={ArrowDownRight} />
+        <StatCard testid="stat-net-cashflow" label="Net Cash Flow (month)" value={fmtEUR(data.month_net_eur)} accent={data.month_net_eur >= 0 ? "gain" : "spend"} icon={Scale} />
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Performance chart */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.15 }}
-          data-testid="performance-chart"
-          className="card-soft p-5 lg:col-span-2"
-        >
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.15 }} data-testid="performance-chart" className="card-soft p-5 lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-heading text-lg font-semibold text-zinc-900">Portfolio Performance</h3>
-            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600">Bot equity · EUR</span>
+            <h3 className="font-heading text-lg font-semibold text-zinc-900">Bot Fleet Performance</h3>
+            <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-600">Combined equity · EUR</span>
           </div>
           {perf.length === 0 ? (
-            <EmptyChart text="Log trading bot returns to see your equity curve." />
+            <EmptyChart text="Log bot returns to see your combined equity curve." />
           ) : (
             <ResponsiveContainer width="100%" height={260}>
               <AreaChart data={perf} margin={{ left: -18, right: 8, top: 4 }}>
@@ -101,25 +60,14 @@ export default function Dashboard() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f1f4" vertical={false} />
                 <XAxis dataKey="date" tickFormatter={shortDate} tick={{ fontSize: 11, fill: "#a1a1aa" }} tickLine={false} axisLine={false} minTickGap={30} />
                 <YAxis tick={{ fontSize: 11, fill: "#a1a1aa" }} tickLine={false} axisLine={false} width={58} tickFormatter={(v) => `€${v}`} />
-                <Tooltip
-                  contentStyle={{ borderRadius: 12, border: "1px solid #e4e4e7", fontSize: 12 }}
-                  formatter={(v) => [fmtEUR(v), "Equity"]}
-                  labelFormatter={(l) => shortDate(l)}
-                />
+                <Tooltip contentStyle={{ borderRadius: 12, border: "1px solid #e4e4e7", fontSize: 12 }} formatter={(v) => [fmtEUR(v), "Equity"]} labelFormatter={(l) => shortDate(l)} />
                 <Area type="monotone" dataKey="value_eur" stroke="#10B981" strokeWidth={2} fill="url(#eq)" />
               </AreaChart>
             </ResponsiveContainer>
           )}
         </motion.div>
 
-        {/* Expense breakdown */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.2 }}
-          data-testid="expense-breakdown-chart"
-          className="card-soft p-5"
-        >
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.2 }} data-testid="expense-breakdown-chart" className="card-soft p-5">
           <h3 className="mb-4 font-heading text-lg font-semibold text-zinc-900">Spending Mix</h3>
           {catData.length === 0 ? (
             <EmptyChart text="No expenses logged yet." />
@@ -128,9 +76,7 @@ export default function Dashboard() {
               <ResponsiveContainer width="100%" height={180}>
                 <PieChart>
                   <Pie data={catData} dataKey="amount_eur" nameKey="category" cx="50%" cy="50%" innerRadius={48} outerRadius={72} paddingAngle={2}>
-                    {catData.map((c) => (
-                      <Cell key={c.category} fill={CATEGORY_COLORS[c.category]} />
-                    ))}
+                    {catData.map((c) => <Cell key={c.category} fill={CATEGORY_COLORS[c.category]} />)}
                   </Pie>
                   <Tooltip formatter={(v) => fmtEUR(v)} contentStyle={{ borderRadius: 12, border: "1px solid #e4e4e7", fontSize: 12 }} />
                 </PieChart>
@@ -151,9 +97,7 @@ export default function Dashboard() {
         </motion.div>
       </div>
 
-      <div className="mt-6">
-        <Disclaimer />
-      </div>
+      <div className="mt-6"><Disclaimer /></div>
     </div>
   );
 }

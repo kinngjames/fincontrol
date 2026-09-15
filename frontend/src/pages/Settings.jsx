@@ -37,16 +37,18 @@ export default function Settings() {
   const exportData = async () => {
     setExporting(true);
     try {
-      const [bot, funds, expenses, settings] = await Promise.all([
-        api.get("/bot-returns"), api.get("/funds"), api.get("/expenses"), api.get("/settings"),
+      const [bots, funds, expenses, income, savings, settings] = await Promise.all([
+        api.get("/bots"), api.get("/funds"), api.get("/expenses"), api.get("/income"), api.get("/savings"), api.get("/settings"),
       ]);
       const payload = {
         exported_at: new Date().toISOString(),
-        user: { name: user?.name, email: user?.email },
+        user: { name: user?.name },
         settings: settings.data,
-        bot_returns: bot.data,
+        bots: bots.data,
         funds: funds.data,
         expenses: expenses.data,
+        income: income.data,
+        savings: savings.data,
       };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -111,8 +113,8 @@ export default function Settings() {
               <div className="text-sm font-medium text-zinc-900">{user?.name}</div>
             </div>
             <div className="rounded-lg bg-zinc-50 p-3">
-              <div className="text-xs text-zinc-400">Email</div>
-              <div className="text-sm font-medium text-zinc-900">{user?.email}</div>
+              <div className="text-xs text-zinc-400">Consolidation currency</div>
+              <div className="text-sm font-medium text-zinc-900">EUR (€)</div>
             </div>
           </div>
         </motion.div>

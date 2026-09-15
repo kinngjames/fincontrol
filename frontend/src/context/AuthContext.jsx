@@ -25,9 +25,11 @@ export function AuthProvider({ children }) {
     loadMe();
   }, [loadMe]);
 
-  const authenticate = (token, userObj) => {
-    localStorage.setItem("fc_token", token);
-    setUser(userObj);
+  const selectProfile = async (userId) => {
+    const { data } = await api.post("/auth/select", { user_id: userId });
+    localStorage.setItem("fc_token", data.token);
+    setUser(data.user);
+    return data.user;
   };
 
   const logout = () => {
@@ -38,7 +40,7 @@ export function AuthProvider({ children }) {
   const updateUser = (patch) => setUser((u) => ({ ...u, ...patch }));
 
   return (
-    <AuthContext.Provider value={{ user, authenticate, logout, updateUser, reload: loadMe }}>
+    <AuthContext.Provider value={{ user, selectProfile, logout, updateUser, reload: loadMe }}>
       {children}
     </AuthContext.Provider>
   );
