@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2, Save, Download, LogOut, ArrowRightLeft } from "lucide-react";
+import { Loader2, Save, Download, LogOut, ArrowRightLeft, FileSpreadsheet } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { PageHeader } from "@/components/Layout";
 import { Disclaimer } from "@/components/Disclaimer";
@@ -19,6 +19,7 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [testUsd, setTestUsd] = useState("100");
   const [exporting, setExporting] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   useEffect(() => {
     api.get("/settings").then((r) => setRate(String(r.data.usd_to_eur))).catch(() => {});
@@ -60,6 +61,43 @@ export default function Settings() {
       toast.success("Data exported");
     } catch (err) { toast.error(apiErr(err.response?.data?.detail)); }
     finally { setExporting(false); }
+  };
+
+  const exportCsv = async () => {
+    setExportingCsv(true);
+    try {
+      const [botsRes, funds, expenses, income, savings] = await Promise.all([
+        api.get("/bots"), api.get("/funds"), api.get("/expenses"), api.get("/income"), api.get("/savings"),
+      ]);
+      const details = await Promise.all(botsRes.data.map((b) => api.get(`/bots/${b.id}`)));
+      const rows = [["Type", "Date", "Name", "Category", "Description", "Amount", "Currency", "Note"]];
+      const esc = (v) => {
+        const s = v == null ? "" : String(v);
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      details.forEach((d) => {
+        const bot = d.data;
+        bot.returns.forEach((r) => rows.push(["BotReturn", r.date, bot.name, "", "", r.amount_usd, "USD", r.note || ""]));
+      });
+      funds.data.forEach((f) => {
+        rows.push(["Fund", "", f.name, "", "Current value", f.current_value_eur, "EUR", ""]);
+        f.contributions.forEach((c) => rows.push(["FundContribution", c.date, f.name, "", "Contribution", c.amount_eur, "EUR", c.note || ""]));
+      });
+      savings.data.transactions.forEach((t) => rows.push(["Savings", t.date, "", "", t.type, t.amount_eur, "EUR", t.note || ""]));
+      income.data.items.forEach((i) => rows.push(["Income", i.date, "", "", i.description || "", i.amount_eur, "EUR", ""]));
+      expenses.data.forEach((e) => rows.push(["Expense", e.date, "", e.category, e.description || "", e.amount_eur, "EUR", ""]));
+
+      const csv = rows.map((r) => r.map(esc).join(",")).join("\n");
+      const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `fincontrol-export-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("CSV exported");
+    } catch (err) { toast.error(apiErr(err.response?.data?.detail)); }
+    finally { setExportingCsv(false); }
   };
 
   const handleLogout = () => { logout(); navigate("/login"); };
@@ -126,6 +164,9 @@ export default function Settings() {
           <div className="mt-4 flex flex-wrap gap-3">
             <Button variant="outline" data-testid="export-data-button" onClick={exportData} disabled={exporting}>
               {exporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />} Export JSON
+            </Button>
+            <Button variant="outline" data-testid="export-csv-button" onClick={exportCsv} disabled={exportingCsv}>
+              {exportingCsv ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileSpreadsheet className="mr-2 h-4 w-4" />} Export CSV
             </Button>
             <Button variant="outline" data-testid="settings-logout-button" onClick={handleLogout} className="text-rose-500 hover:bg-rose-50 hover:text-rose-600">
               <LogOut className="mr-2 h-4 w-4" /> Log out

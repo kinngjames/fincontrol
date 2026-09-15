@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { Plus, Trash2, Loader2, PiggyBank, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
+import { Plus, Minus, Trash2, Loader2, PiggyBank, ArrowDownToLine, ArrowUpFromLine, Target, Pencil } from "lucide-react";
 import { PageHeader } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import api, { apiErr } from "@/lib/api";
 import { fmtEUR, todayStr, shortDate } from "@/lib/format";
@@ -15,10 +16,17 @@ export default function Savings() {
   const [data, setData] = useState(null);
   const [form, setForm] = useState({ type: "deposit", amount_eur: "", date: todayStr(), note: "" });
   const [saving, setSaving] = useState(false);
+  const [goals, setGoals] = useState([]);
+  const [goalOpen, setGoalOpen] = useState(false);
+  const [goalForm, setGoalForm] = useState({ name: "", target_eur: "" });
+  const [editGoal, setEditGoal] = useState(null);
+  const [money, setMoney] = useState(null); // { goal, type }
+  const [moneyAmt, setMoneyAmt] = useState("");
 
   const load = useCallback(async () => {
-    const { data } = await api.get("/savings");
-    setData(data);
+    const [sav, gls] = await Promise.all([api.get("/savings"), api.get("/savings/goals")]);
+    setData(sav.data);
+    setGoals(gls.data);
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -41,6 +49,37 @@ export default function Savings() {
     toast.success("Transaction removed");
   };
 
+  const createGoal = async () => {
+    if (!goalForm.name.trim()) return;
+    try {
+      const { data } = await api.post("/savings/goals", { name: goalForm.name, target_eur: parseFloat(goalForm.target_eur || 0) });
+      setGoals(data); setGoalForm({ name: "", target_eur: "" }); setGoalOpen(false);
+      toast.success("Goal created");
+    } catch (err) { toast.error(apiErr(err.response?.data?.detail)); }
+  };
+
+  const saveGoal = async () => {
+    try {
+      const { data } = await api.put(`/savings/goals/${editGoal.id}`, { name: editGoal.name, target_eur: parseFloat(editGoal.target_eur) });
+      setGoals(data); setEditGoal(null); toast.success("Goal updated");
+    } catch (err) { toast.error(apiErr(err.response?.data?.detail)); }
+  };
+
+  const removeGoal = async (id) => {
+    const { data } = await api.delete(`/savings/goals/${id}`);
+    setGoals(data); load(); toast.success("Goal deleted");
+  };
+
+  const addMoney = async () => {
+    if (moneyAmt === "") return;
+    try {
+      const { data } = await api.post("/savings", { type: money.type, amount_eur: parseFloat(moneyAmt), date: todayStr(), goal_id: money.goal.id });
+      setGoals(data.goals || goals);
+      setMoney(null); setMoneyAmt("");
+      toast.success(money.type === "deposit" ? "Added to goal" : "Taken from goal");
+    } catch (err) { toast.error(apiErr(err.response?.data?.detail)); }
+  };
+
   if (!data)
     return <div className="flex h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>;
 
@@ -52,6 +91,77 @@ export default function Savings() {
         <StatCard testid="savings-balance" label="Current Balance" value={fmtEUR(data.balance_eur)} accent="ink" icon={PiggyBank} />
         <StatCard testid="savings-deposits" label="Total Deposits" value={fmtEUR(data.total_deposits_eur)} accent="gain" icon={ArrowDownToLine} />
         <StatCard testid="savings-withdrawals" label="Total Withdrawals" value={fmtEUR(data.total_withdrawals_eur)} accent="spend" icon={ArrowUpFromLine} />
+      </div>
+
+      {/* Goals */}
+      <div className="mb-6" data-testid="goals-section">
+        <div className="mb-3 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Target className="h-4 w-4 text-zinc-500" />
+            <h2 className="font-heading text-xl font-bold text-zinc-900">Savings Goals</h2>
+          </div>
+          <Dialog open={goalOpen} onOpenChange={setGoalOpen}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" data-testid="add-goal-button"><Plus className="mr-1.5 h-4 w-4" /> New Goal</Button>
+            </DialogTrigger>
+            <DialogContent data-testid="create-goal-dialog">
+              <DialogHeader><DialogTitle>Create Goal</DialogTitle></DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-1.5"><Label>Goal name</Label><Input data-testid="goal-name-input" value={goalForm.name} onChange={(e) => setGoalForm({ ...goalForm, name: e.target.value })} placeholder="e.g. Holiday fund" /></div>
+                <div className="space-y-1.5">
+                  <Label>Target (EUR)</Label>
+                  <div className="relative">
+                    <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">€</span>
+                    <Input type="number" step="0.01" data-testid="goal-target-input" className="pl-7" value={goalForm.target_eur} onChange={(e) => setGoalForm({ ...goalForm, target_eur: e.target.value })} placeholder="0.00" />
+                  </div>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setGoalOpen(false)}>Cancel</Button>
+                <Button data-testid="save-goal-button" onClick={createGoal} className="bg-zinc-900 text-white hover:bg-zinc-800">Create</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+
+        {goals.length === 0 ? (
+          <div className="card-soft flex items-center justify-center py-10 text-center text-sm text-zinc-400">
+            No goals yet. Create a pot with a target and track your progress.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {goals.map((g) => {
+              const pct = Math.min(100, g.progress_pct);
+              const reached = g.target_eur > 0 && g.saved_eur >= g.target_eur;
+              return (
+                <motion.div key={g.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} data-testid={`goal-card-${g.id}`} className="card-soft p-5">
+                  <div className="flex items-start justify-between">
+                    <h3 className="font-heading text-lg font-semibold text-zinc-900">{g.name}</h3>
+                    <div className="flex gap-1">
+                      <button data-testid={`goal-edit-${g.id}`} onClick={() => setEditGoal({ ...g, target_eur: String(g.target_eur) })} className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-100 hover:text-zinc-900"><Pencil className="h-4 w-4" /></button>
+                      <button data-testid={`goal-delete-${g.id}`} onClick={() => removeGoal(g.id)} className="rounded-md p-1.5 text-zinc-400 hover:bg-rose-50 hover:text-rose-500"><Trash2 className="h-4 w-4" /></button>
+                    </div>
+                  </div>
+                  <div className="mt-2 flex items-baseline justify-between">
+                    <span className="font-mono text-xl font-semibold tabular-nums text-zinc-900">{fmtEUR(g.saved_eur)}</span>
+                    <span className="text-xs text-zinc-400">of {fmtEUR(g.target_eur)}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-100">
+                    <div className={`h-full rounded-full transition-all ${reached ? "bg-emerald-500" : "bg-indigo-500"}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between text-xs">
+                    <span className={reached ? "font-medium text-emerald-600" : "text-zinc-500"}>{reached ? "Goal reached 🎉" : `${g.progress_pct}%`}</span>
+                    <span className="text-zinc-400">{g.target_eur > g.saved_eur ? `${fmtEUR(g.target_eur - g.saved_eur)} to go` : ""}</span>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    <Button size="sm" variant="outline" data-testid={`goal-add-${g.id}`} onClick={() => { setMoney({ goal: g, type: "deposit" }); setMoneyAmt(""); }} className="flex-1 text-emerald-600 hover:bg-emerald-50"><Plus className="mr-1 h-3.5 w-3.5" /> Add</Button>
+                    <Button size="sm" variant="outline" data-testid={`goal-take-${g.id}`} onClick={() => { setMoney({ goal: g, type: "withdrawal" }); setMoneyAmt(""); }} className="flex-1 text-rose-500 hover:bg-rose-50"><Minus className="mr-1 h-3.5 w-3.5" /> Take</Button>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
@@ -135,6 +245,39 @@ export default function Savings() {
           </table>
         </div>
       </div>
+
+      <Dialog open={!!editGoal} onOpenChange={(o) => !o && setEditGoal(null)}>
+        <DialogContent data-testid="edit-goal-dialog">
+          <DialogHeader><DialogTitle>Edit Goal</DialogTitle></DialogHeader>
+          {editGoal && (
+            <div className="space-y-4">
+              <div className="space-y-1.5"><Label>Name</Label><Input value={editGoal.name} onChange={(e) => setEditGoal({ ...editGoal, name: e.target.value })} /></div>
+              <div className="space-y-1.5"><Label>Target (EUR)</Label><Input type="number" step="0.01" data-testid="edit-goal-target" value={editGoal.target_eur} onChange={(e) => setEditGoal({ ...editGoal, target_eur: e.target.value })} /></div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditGoal(null)}>Cancel</Button>
+            <Button data-testid="save-goal-edit" onClick={saveGoal} className="bg-zinc-900 text-white hover:bg-zinc-800">Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!money} onOpenChange={(o) => !o && setMoney(null)}>
+        <DialogContent data-testid="goal-money-dialog">
+          <DialogHeader><DialogTitle>{money?.type === "deposit" ? "Add to" : "Take from"} {money?.goal?.name}</DialogTitle></DialogHeader>
+          <div className="space-y-1.5">
+            <Label>Amount (EUR)</Label>
+            <div className="relative">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm text-zinc-400">€</span>
+              <Input type="number" step="0.01" autoFocus data-testid="goal-money-input" className="pl-7" value={moneyAmt} onChange={(e) => setMoneyAmt(e.target.value)} placeholder="0.00" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMoney(null)}>Cancel</Button>
+            <Button data-testid="goal-money-confirm" onClick={addMoney} className="bg-zinc-900 text-white hover:bg-zinc-800">Confirm</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

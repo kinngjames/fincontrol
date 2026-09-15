@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
-import { Plus, Bot as BotIcon, TrendingUp, Activity, CalendarDays, Pencil, Trash2, ChevronRight, Loader2 } from "lucide-react";
+import { Plus, Bot as BotIcon, TrendingUp, Activity, CalendarDays, Pencil, Trash2, ChevronRight, Loader2, Award } from "lucide-react";
 import { PageHeader } from "@/components/Layout";
 import { StatCard } from "@/components/StatCard";
 import { Disclaimer } from "@/components/Disclaimer";
@@ -64,6 +64,12 @@ export default function Bots() {
 
   if (!ov)
     return <div className="flex h-[60vh] items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-zinc-400" /></div>;
+
+  const bestId = (() => {
+    const winners = ov.bots.filter((b) => b.this_month_usd > 0);
+    if (!winners.length) return null;
+    return winners.reduce((a, b) => (b.this_month_usd > a.this_month_usd ? b : a)).id;
+  })();
 
   return (
     <div className="mx-auto max-w-7xl p-4 sm:p-6 lg:p-8">
@@ -155,6 +161,11 @@ export default function Bots() {
                 <div className="flex items-center gap-2">
                   <span className={`h-2 w-2 rounded-full ${b.status === "active" ? "bg-emerald-500" : "bg-zinc-300"}`} />
                   <h3 className="truncate font-heading text-lg font-semibold text-zinc-900">{b.name}</h3>
+                  {b.id === bestId && (
+                    <span data-testid={`best-badge-${b.id}`} className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold text-amber-600">
+                      <Award className="h-3 w-3" /> Best this month
+                    </span>
+                  )}
                 </div>
                 <div className={`mt-2 font-mono text-2xl font-semibold tabular-nums ${b.cumulative_usd >= 0 ? "text-emerald-600" : "text-rose-500"}`}>
                   {fmtUSD(b.cumulative_usd)}

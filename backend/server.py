@@ -146,11 +146,37 @@ class RecurringIncomeUpdate(BaseModel):
     active: Optional[bool] = None
 
 
+class RecurringExpenseInput(BaseModel):
+    amount_eur: float
+    category: str
+    day: int = 1
+    description: Optional[str] = ""
+
+
+class RecurringExpenseUpdate(BaseModel):
+    amount_eur: Optional[float] = None
+    category: Optional[str] = None
+    day: Optional[int] = None
+    description: Optional[str] = None
+    active: Optional[bool] = None
+
+
 class SavingsInput(BaseModel):
     type: str  # deposit | withdrawal
     amount_eur: float
     date: str
     note: Optional[str] = ""
+    goal_id: Optional[str] = None
+
+
+class GoalInput(BaseModel):
+    name: str
+    target_eur: float
+
+
+class GoalUpdate(BaseModel):
+    name: Optional[str] = None
+    target_eur: Optional[float] = None
 
 
 class SettingsInput(BaseModel):
@@ -466,7 +492,7 @@ async def delete_contribution(fund_id: str, contrib_id: str, user: dict = Depend
 # ---------------------------------------------------------------------------
 @api_router.get("/savings")
 async def get_savings(user: dict = Depends(get_current_user)):
-    txs = await db.savings.find({"user_id": user["id"]}).sort("date", 1).to_list(3000)
+    txs = await db.savings.find({"user_id": user["id"], "goal_id": None}).sort("date", 1).to_list(3000)
     deposits = sum(t["amount_eur"] for t in txs if t["type"] == "deposit")
     withdrawals = sum(t["amount_eur"] for t in txs if t["type"] == "withdrawal")
     history = []
@@ -484,12 +510,67 @@ async def get_savings(user: dict = Depends(get_current_user)):
     }
 
 
+async def _goals_payload(uid: str):
+    goals = await db.savings_goals.find({"user_id": uid}).sort("created_at", 1).to_list(100)
+    out = []
+    for g in goals:
+        gid = str(g["_id"])
+        txs = await db.savings.find({"user_id": uid, "goal_id": gid}).to_list(3000)
+        saved = sum(t["amount_eur"] if t["type"] == "deposit" else -t["amount_eur"] for t in txs)
+        target = g.get("target_eur", 0.0)
+        out.append({
+            "id": gid, "name": g["name"], "target_eur": target,
+            "saved_eur": round(saved, 2),
+            "progress_pct": round((saved / target * 100) if target else 0.0, 1),
+        })
+    return out
+
+
+@api_router.get("/savings/goals")
+async def list_goals(user: dict = Depends(get_current_user)):
+    return await _goals_payload(user["id"])
+
+
+@api_router.post("/savings/goals")
+async def create_goal(payload: GoalInput, user: dict = Depends(get_current_user)):
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Name is required")
+    await db.savings_goals.insert_one({"user_id": user["id"], "name": payload.name.strip(),
+                                       "target_eur": max(0.0, payload.target_eur), "created_at": now_iso()})
+    return await _goals_payload(user["id"])
+
+
+@api_router.put("/savings/goals/{goal_id}")
+async def update_goal(goal_id: str, payload: GoalUpdate, user: dict = Depends(get_current_user)):
+    upd = {}
+    if payload.name is not None:
+        upd["name"] = payload.name.strip()
+    if payload.target_eur is not None:
+        upd["target_eur"] = max(0.0, payload.target_eur)
+    r = await db.savings_goals.update_one({"_id": ObjectId(goal_id), "user_id": user["id"]}, {"$set": upd})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    return await _goals_payload(user["id"])
+
+
+@api_router.delete("/savings/goals/{goal_id}")
+async def delete_goal(goal_id: str, user: dict = Depends(get_current_user)):
+    r = await db.savings_goals.delete_one({"_id": ObjectId(goal_id), "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.savings.delete_many({"user_id": user["id"], "goal_id": goal_id})
+    return await _goals_payload(user["id"])
+
+
 @api_router.post("/savings")
 async def add_savings(payload: SavingsInput, user: dict = Depends(get_current_user)):
     if payload.type not in ("deposit", "withdrawal"):
         raise HTTPException(status_code=400, detail="Invalid type")
     await db.savings.insert_one({"user_id": user["id"], "type": payload.type, "amount_eur": abs(payload.amount_eur),
-                                 "date": payload.date, "note": payload.note or "", "created_at": now_iso()})
+                                 "date": payload.date, "note": payload.note or "",
+                                 "goal_id": payload.goal_id, "created_at": now_iso()})
+    if payload.goal_id:
+        return {"goals": await _goals_payload(user["id"])}
     return await get_savings(user)
 
 
@@ -626,8 +707,83 @@ async def delete_income(item_id: str, user: dict = Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 @api_router.get("/expenses")
 async def list_expenses(user: dict = Depends(get_current_user)):
+    await _materialize_recurring_expenses(user["id"])
     docs = await db.expenses.find({"user_id": user["id"]}).sort("date", -1).to_list(3000)
     return [serialize(d) for d in docs]
+
+
+async def _materialize_recurring_expenses(uid: str):
+    templates = await db.recurring_expense.find({"user_id": uid, "active": True}).to_list(100)
+    if not templates:
+        return
+    current_ym = datetime.now(timezone.utc).strftime("%Y-%m")
+    for t in templates:
+        start_ym = t.get("start_month", current_ym)
+        day = max(1, min(int(t.get("day", 1)), 28))
+        for ym in _month_iter(start_ym, current_ym):
+            exists = await db.expenses.find_one({"user_id": uid, "recurring_id": str(t["_id"]), "month": ym})
+            if exists:
+                continue
+            last_day = calendar.monthrange(int(ym[:4]), int(ym[5:7]))[1]
+            d = f"{ym}-{min(day, last_day):02d}"
+            await db.expenses.insert_one({
+                "user_id": uid, "amount_eur": t["amount_eur"], "category": t.get("category", "Other"),
+                "date": d, "description": t.get("description", ""), "recurring_id": str(t["_id"]),
+                "month": ym, "created_at": now_iso(),
+            })
+
+
+@api_router.get("/expenses/recurring")
+async def list_recurring_expenses(user: dict = Depends(get_current_user)):
+    docs = await db.recurring_expense.find({"user_id": user["id"]}).sort("created_at", 1).to_list(100)
+    return [{"id": str(d["_id"]), "amount_eur": d["amount_eur"], "category": d.get("category", "Other"),
+             "day": d.get("day", 1), "description": d.get("description", ""), "active": d.get("active", True)} for d in docs]
+
+
+@api_router.post("/expenses/recurring")
+async def create_recurring_expense(payload: RecurringExpenseInput, user: dict = Depends(get_current_user)):
+    if payload.category not in CATEGORIES:
+        raise HTTPException(status_code=400, detail="Invalid category")
+    await db.recurring_expense.insert_one({"user_id": user["id"], "amount_eur": payload.amount_eur,
+                                           "category": payload.category, "day": max(1, min(payload.day, 28)),
+                                           "description": payload.description or "", "active": True,
+                                           "start_month": datetime.now(timezone.utc).strftime("%Y-%m"), "created_at": now_iso()})
+    await _materialize_recurring_expenses(user["id"])
+    return await list_recurring_expenses(user)
+
+
+@api_router.put("/expenses/recurring/{rec_id}")
+async def update_recurring_expense(rec_id: str, payload: RecurringExpenseUpdate, user: dict = Depends(get_current_user)):
+    upd = {}
+    if payload.amount_eur is not None:
+        upd["amount_eur"] = payload.amount_eur
+    if payload.category is not None:
+        if payload.category not in CATEGORIES:
+            raise HTTPException(status_code=400, detail="Invalid category")
+        upd["category"] = payload.category
+    if payload.day is not None:
+        upd["day"] = max(1, min(payload.day, 28))
+    if payload.description is not None:
+        upd["description"] = payload.description
+    if payload.active is not None:
+        upd["active"] = payload.active
+    r = await db.recurring_expense.update_one({"_id": ObjectId(rec_id), "user_id": user["id"]}, {"$set": upd})
+    if r.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    sync = {k: upd[k] for k in ("amount_eur", "category", "description") if k in upd}
+    if sync:
+        await db.expenses.update_many({"user_id": user["id"], "recurring_id": rec_id}, {"$set": sync})
+    await _materialize_recurring_expenses(user["id"])
+    return await list_recurring_expenses(user)
+
+
+@api_router.delete("/expenses/recurring/{rec_id}")
+async def delete_recurring_expense(rec_id: str, user: dict = Depends(get_current_user)):
+    r = await db.recurring_expense.delete_one({"_id": ObjectId(rec_id), "user_id": user["id"]})
+    if r.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Not found")
+    await db.expenses.delete_many({"user_id": user["id"], "recurring_id": rec_id})
+    return await list_recurring_expenses(user)
 
 
 @api_router.post("/expenses")
